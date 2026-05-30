@@ -13,9 +13,19 @@ import { reconcilePeriod } from "../core/reconcile";
 const DEFAULT_WORKSPACE_ID = 1;
 const UPLOAD_TOKEN_TTL_MS = 30 * 60 * 1000;
 
-function wsId(ctx: RouteCtx): number {
-  return Number(ctx.url.searchParams.get("workspace_id") ?? DEFAULT_WORKSPACE_ID);
+function wsId(_ctx: RouteCtx): number {
+  // Single-workspace MVP: always the default workspace (not caller-controlled).
+  // Multi-workspace will resolve the allowed workspace from ctx.identity.
+  return DEFAULT_WORKSPACE_ID;
 }
+
+async function tagBelongsToWorkspace(env: Env, ws: number, tagId: number): Promise<boolean> {
+  const row = await env.DB.prepare("SELECT 1 AS ok FROM channel_tags WHERE id = ? AND workspace_id = ?")
+    .bind(tagId, ws).first<{ ok: number }>();
+  return !!row;
+}
+
+const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 function actorOf(ctx: RouteCtx): string {
   return ctx.identity?.email ?? "system";
 }
@@ -244,6 +254,9 @@ async function verifyPaymentHandler(req: Request, env: Env, ctx: RouteCtx): Prom
   const before = await getPayment(env.DB, id);
   if (!before) return errorResponse(404, "not found");
   const b = await readJson<{ verified_channel_tag_id?: number }>(req) ?? {};
+  if (b.verified_channel_tag_id != null && !(await tagBelongsToWorkspace(env, before.workspace_id, b.verified_channel_tag_id))) {
+    return errorResponse(400, "invalid channel tag");
+  }
   try {
     const after = await verifyPayment(env.DB, id, { verifiedBy: actorOf(ctx), verifiedChannelTagId: b.verified_channel_tag_id ?? null });
     await writeAudit(env.DB, { workspaceId: before.workspace_id, actor: actorOf(ctx), action: "payment.verify", entityType: "payment", entityId: id, before, after });
@@ -288,9 +301,16 @@ async function manualPayment(req: Request, env: Env, ctx: RouteCtx): Promise<Res
     verified_channel_tag_id?: number; payment_note?: string;
   }>(req);
   if (!b?.subscription_id || !b.period) return errorResponse(400, "subscription_id and period are required");
+  if (!PERIOD_RE.test(b.period)) return errorResponse(400, "period must be YYYY-MM");
   const status = b.status ?? "verified";
   if (!["pending", "paid", "verified", "rejected"].includes(status)) return errorResponse(400, "invalid status");
+  if (b.amount !== undefined && (!Number.isInteger(b.amount) || b.amount < 0)) {
+    return errorResponse(400, "amount must be a non-negative integer");
+  }
   const ws = wsId(ctx);
+  if (b.verified_channel_tag_id != null && !(await tagBelongsToWorkspace(env, ws, b.verified_channel_tag_id))) {
+    return errorResponse(400, "invalid channel tag");
+  }
   const sub = await env.DB.prepare(
     `SELECT s.billing_day AS billing_day, pl.monthly_amount AS amount FROM subscriptions s JOIN plans pl ON pl.id = s.plan_id WHERE s.id = ? AND s.workspace_id = ?`
   ).bind(b.subscription_id, ws).first<{ billing_day: number; amount: number }>();

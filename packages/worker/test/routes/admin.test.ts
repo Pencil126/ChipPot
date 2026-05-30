@@ -120,6 +120,16 @@ describe("admin API", () => {
     expect(await auditCount("proof.delete", pid)).toBe(1);
   });
 
+  it("validates manual payment period/amount/tag", async () => {
+    const u = await call("POST", "/admin/users", { display_name: "Val" });
+    const uid = ((await u!.json()) as any).id as number;
+    const s = await call("POST", "/admin/subscriptions", { user_id: uid, plan_id: 1, start_date: "2027-01-01" });
+    const sid = ((await s!.json()) as any).id as number;
+    expect((await call("POST", "/admin/payments/manual", { subscription_id: sid, period: "2027-13" }))!.status).toBe(400);
+    expect((await call("POST", "/admin/payments/manual", { subscription_id: sid, period: "2027-02", amount: -5 }))!.status).toBe(400);
+    expect((await call("POST", "/admin/payments/manual", { subscription_id: sid, period: "2027-03", verified_channel_tag_id: 999999 }))!.status).toBe(400);
+  });
+
   it("rejects an invalid status transition with 409", async () => {
     const u = await call("POST", "/admin/users", { display_name: "Carol" });
     const uid = ((await u!.json()) as any).id as number;

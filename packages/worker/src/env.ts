@@ -1,6 +1,13 @@
 export interface Env {
   DB: D1Database;
   BUCKET: R2Bucket;
+  // Cloudflare Access (secrets / vars; set via wrangler secret put or .dev.vars).
+  ACCESS_TEAM_DOMAIN?: string; // <team> in <team>.cloudflareaccess.com
+  ACCESS_AUD?: string; // Access application AUD tag
+  ACCESS_ALLOWED_EMAILS?: string; // optional comma-separated allowlist
+  // Allowed browser origins for CORS (comma-separated; e.g. the Pages URLs).
+  WEB_ORIGIN?: string;
+  ADMIN_ORIGIN?: string;
 }
 
 export interface WorkspaceSettings {

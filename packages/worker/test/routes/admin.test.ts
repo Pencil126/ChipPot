@@ -84,6 +84,22 @@ describe("admin API", () => {
     expect(await auditCount("payment.manual", mId)).toBe(1);
   });
 
+  it("reads and updates workspace settings", async () => {
+    const g = await call("GET", "/admin/workspace");
+    const ws = ((await g!.json()) as any).workspace;
+    expect(ws.settings.timezone).toBe("Asia/Taipei");
+
+    const u = await call("PATCH", "/admin/workspace", { billing_day: 7, settings: { overdue_days: 5 } });
+    expect(u!.status).toBe(200);
+    const g2 = await call("GET", "/admin/workspace");
+    const ws2 = ((await g2!.json()) as any).workspace;
+    expect(ws2.billing_day).toBe(7);
+    expect(ws2.settings.overdue_days).toBe(5);
+    expect(ws2.settings.timezone).toBe("Asia/Taipei"); // preserved
+    // restore
+    await call("PATCH", "/admin/workspace", { billing_day: 5, settings: { overdue_days: 3 } });
+  });
+
   it("deletes a proof (R2 + key) and audits it", async () => {
     // seed a payment with a screenshot directly
     const key = "1/2026-09/1/admintest.png";

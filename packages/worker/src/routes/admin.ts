@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { Router, type RouteCtx } from "../router";
 import { errorResponse, json } from "../http";
+import { parseSettings } from "../env";
 import { nowUtcIso, taipeiDate, taipeiPeriod } from "../core/time";
 import { issueUploadToken } from "../core/tokens";
 import { writeAudit } from "../core/audit";
@@ -24,6 +25,37 @@ async function readJson<T>(req: Request): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+// ── Workspace / settings ─────────────────────────────────────────────────────
+
+async function getWorkspace(_req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
+  const row = await env.DB.prepare("SELECT * FROM workspaces WHERE id = ?").bind(wsId(ctx))
+    .first<{ id: number; name: string; billing_day: number; settings: string }>();
+  if (!row) return errorResponse(404, "not found");
+  return json({ workspace: { ...row, settings: parseSettings(row.settings) } });
+}
+
+async function updateWorkspace(req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
+  const ws = wsId(ctx);
+  const before = await env.DB.prepare("SELECT billing_day, settings FROM workspaces WHERE id = ?")
+    .bind(ws).first<{ billing_day: number; settings: string }>();
+  if (!before) return errorResponse(404, "not found");
+  const b = await readJson<{ billing_day?: number; settings?: Record<string, unknown> }>(req) ?? {};
+  if (b.billing_day !== undefined && (!Number.isInteger(b.billing_day) || b.billing_day < 1 || b.billing_day > 28)) {
+    return errorResponse(400, "billing_day must be 1..28");
+  }
+  let merged: string;
+  try {
+    merged = JSON.stringify(parseSettings(JSON.stringify({ ...parseSettings(before.settings), ...(b.settings ?? {}) })));
+  } catch (e) {
+    return errorResponse(400, (e as Error).message);
+  }
+  const billingDay = b.billing_day ?? before.billing_day;
+  await env.DB.prepare("UPDATE workspaces SET billing_day = ?, settings = ?, updated_at = ? WHERE id = ?")
+    .bind(billingDay, merged, nowUtcIso(), ws).run();
+  await writeAudit(env.DB, { workspaceId: ws, actor: actorOf(ctx), action: "workspace.update", entityType: "workspace", entityId: ws, before, after: { billing_day: billingDay, settings: merged } });
+  return json({ ok: true });
 }
 
 // ── Reconcile ────────────────────────────────────────────────────────────────
@@ -320,6 +352,8 @@ async function createUploadLink(req: Request, env: Env, ctx: RouteCtx): Promise<
 
 export function buildAdminRouter(): Router<Env> {
   return new Router<Env>()
+    .get("/admin/workspace", getWorkspace)
+    .patch("/admin/workspace", updateWorkspace)
     .get("/admin/reconcile", reconcile)
     .get("/admin/users", listUsers)
     .post("/admin/users", createUser)

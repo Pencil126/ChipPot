@@ -13,6 +13,11 @@ migrations_dir = "migrations"
 binding = "BUCKET"
 bucket_name = "chippot-proofs"
 
+# Non-secret Discord config (public values). Bot token is a secret (wrangler secret put).
+[vars]
+DISCORD_APPLICATION_ID = "1510355256498978917"
+DISCORD_PUBLIC_KEY = "f322b974d23880e58e830ed8ac9b587ee48d1beb16887efb0bad6617b914e2de"
+
 # 01:00 UTC = 09:00 Asia/Taipei, daily.
 [triggers]
 crons = ["0 1 * * *"]

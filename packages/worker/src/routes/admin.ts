@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import { Router, type RouteCtx } from "../router";
 import { errorResponse, json } from "../http";
 import { nowUtcIso, taipeiDate, taipeiPeriod } from "../core/time";
-import { generateToken, hashToken } from "../core/tokens";
+import { issueUploadToken } from "../core/tokens";
 import { writeAudit } from "../core/audit";
 import { getPayment, verifyPayment, rejectPayment, overrideAmount, InvalidPaymentTransition } from "../core/payments";
 import { ensureFirstPayment } from "../core/billing";
@@ -308,14 +308,10 @@ async function createUploadLink(req: Request, env: Env, ctx: RouteCtx): Promise<
   const ws = wsId(ctx);
   const user = await env.DB.prepare("SELECT id FROM users WHERE id = ? AND workspace_id = ?").bind(b.user_id, ws).first();
   if (!user) return errorResponse(400, "invalid user");
-  const raw = generateToken();
-  const hash = await hashToken(raw);
-  const now = Date.now();
-  const expiresAt = new Date(now + UPLOAD_TOKEN_TTL_MS).toISOString();
-  await env.DB.prepare(
-    `INSERT INTO upload_tokens (token_hash, workspace_id, user_id, period, subscription_id, expires_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).bind(hash, ws, b.user_id, b.period, b.subscription_id ?? null, expiresAt, new Date(now).toISOString()).run();
+  const { raw, expiresAt } = await issueUploadToken(env.DB, {
+    workspaceId: ws, userId: b.user_id, period: b.period, subscriptionId: b.subscription_id ?? null,
+    ttlMs: UPLOAD_TOKEN_TTL_MS,
+  });
   await writeAudit(env.DB, { workspaceId: ws, actor: actorOf(ctx), action: "upload_link.create", entityType: "user", entityId: b.user_id, after: { period: b.period, subscription_id: b.subscription_id ?? null, expires_at: expiresAt } });
   return json({ token: raw, path: `/u/${raw}`, expires_at: expiresAt }, { status: 201 });
 }

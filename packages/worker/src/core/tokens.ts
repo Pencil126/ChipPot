@@ -30,6 +30,30 @@ export interface UploadTokenRow {
   created_at: string;
 }
 
+export interface IssuedToken {
+  raw: string;
+  expiresAt: string;
+}
+
+/** Mint a one-time upload token (default 30-min TTL), storing only its hash. */
+export async function issueUploadToken(
+  db: D1Database,
+  opts: { workspaceId: number; userId: number; period: string; subscriptionId?: number | null; ttlMs?: number }
+): Promise<IssuedToken> {
+  const raw = generateToken();
+  const hash = await hashToken(raw);
+  const now = Date.now();
+  const expiresAt = new Date(now + (opts.ttlMs ?? 30 * 60 * 1000)).toISOString();
+  await db
+    .prepare(
+      `INSERT INTO upload_tokens (token_hash, workspace_id, user_id, period, subscription_id, expires_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(hash, opts.workspaceId, opts.userId, opts.period, opts.subscriptionId ?? null, expiresAt, new Date(now).toISOString())
+    .run();
+  return { raw, expiresAt };
+}
+
 /** Look up a token by its hash that is unused, unrevoked, and unexpired (at nowIso). */
 export async function findValidUploadToken(
   db: D1Database,

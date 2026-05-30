@@ -206,6 +206,72 @@ export async function submitProofWithToken(
   return { paymentId: row!.id, screenshotKey: key };
 }
 
+export interface RecordProofInput {
+  subscriptionId: number;
+  workspaceId: number;
+  userId: number;
+  period: string;
+  body: R2Body;
+  ext: string;
+  contentType: string;
+  source: string; // e.g. "user_slash" | "admin_manual"
+  paymentNote?: string | null;
+}
+
+/**
+ * Store a proof and mark the payment paid WITHOUT a one-time token (Discord slash /
+ * admin paths, where the channel already authenticates the user). Same R2 compensation
+ * + read-back-before-delete guarantees as the token flow; only pending/rejected accept a
+ * proof (no paid->paid).
+ */
+export async function recordProof(
+  env: Env,
+  input: RecordProofInput
+): Promise<SubmitProofResult> {
+  const { subscriptionId, workspaceId, userId, period } = input;
+  await ensurePeriodPayment(env.DB, subscriptionId, period);
+  const key = buildScreenshotKey(workspaceId, period, userId, input.ext, crypto.randomUUID());
+  await putObject(env.BUCKET, key, input.body, input.contentType);
+  const now = nowUtcIso();
+
+  const landed = async () =>
+    env.DB
+      .prepare("SELECT 1 AS ok FROM payments WHERE subscription_id = ? AND period = ? AND screenshot_key = ?")
+      .bind(subscriptionId, period, key)
+      .first<{ ok: number }>()
+      .catch(() => null);
+
+  try {
+    const res = await env.DB
+      .prepare(
+        `UPDATE payments
+           SET status = 'paid', has_proof = 1, screenshot_key = ?,
+               payment_note = COALESCE(?, payment_note),
+               source = ?, submitted_at = ?, paid_at = ?, updated_at = ?
+         WHERE subscription_id = ? AND period = ? AND workspace_id = ?
+           AND status IN ('pending','rejected')`
+      )
+      .bind(key, input.paymentNote ?? null, input.source, now, now, now, subscriptionId, period, workspaceId)
+      .run();
+    if ((res.meta.changes ?? 0) !== 1 && !(await landed())) {
+      await deleteObject(env.BUCKET, key);
+      throw new NoEligiblePayment(subscriptionId, period);
+    }
+  } catch (err) {
+    if (err instanceof NoEligiblePayment) throw err;
+    if (!(await landed())) {
+      await deleteObject(env.BUCKET, key).catch(() => {});
+      throw err;
+    }
+  }
+
+  const row = await env.DB
+    .prepare("SELECT id FROM payments WHERE subscription_id = ? AND period = ? AND screenshot_key = ?")
+    .bind(subscriptionId, period, key)
+    .first<{ id: number }>();
+  return { paymentId: row!.id, screenshotKey: key };
+}
+
 /** Decide which precise error to raise when the guarded batch didn't apply. */
 async function throwSubmitError(
   env: Env,

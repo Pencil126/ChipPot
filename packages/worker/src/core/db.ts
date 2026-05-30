@@ -34,6 +34,37 @@ export async function getWorkspace(
     .first<WorkspaceRow>();
 }
 
+/** Resolve the workspace whose settings.discord_guild_id matches (channel→workspace map). */
+export async function getWorkspaceIdByGuild(
+  db: D1Database,
+  guildId: string
+): Promise<number | null> {
+  const row = await db
+    .prepare("SELECT id FROM workspaces WHERE json_extract(settings, '$.discord_guild_id') = ?")
+    .bind(guildId)
+    .first<{ id: number }>();
+  return row ? row.id : null;
+}
+
+export interface MemberRow {
+  id: number;
+  workspace_id: number;
+  discord_id: string | null;
+  display_name: string;
+}
+
+/** Find a workspace member by their Discord id. */
+export async function getUserByDiscordId(
+  db: D1Database,
+  workspaceId: number,
+  discordId: string
+): Promise<MemberRow | null> {
+  return db
+    .prepare("SELECT id, workspace_id, discord_id, display_name FROM users WHERE workspace_id = ? AND discord_id = ?")
+    .bind(workspaceId, discordId)
+    .first<MemberRow>();
+}
+
 export async function getActivePlans(
   db: D1Database,
   workspaceId: number

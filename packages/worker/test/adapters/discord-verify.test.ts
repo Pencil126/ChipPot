@@ -62,12 +62,14 @@ function interactionReq(sig: string, timestamp: string, body: string): Request {
   });
 }
 
+const CTX = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext;
+
 describe("handleInteractions", () => {
   it("answers PING with PONG when the signature is valid", async () => {
     const pair = await genEd25519();
     const env = { DISCORD_PUBLIC_KEY: await pubHexOf(pair) } as Env;
     const sig = await signHex(pair, TIMESTAMP + BODY);
-    const res = await handleInteractions(interactionReq(sig, TIMESTAMP, BODY), env);
+    const res = await handleInteractions(interactionReq(sig, TIMESTAMP, BODY), env, CTX);
     expect(res.status).toBe(200);
     expect((await res.json()) as any).toEqual({ type: 1 });
   });
@@ -76,12 +78,12 @@ describe("handleInteractions", () => {
     const pair = await genEd25519();
     const env = { DISCORD_PUBLIC_KEY: await pubHexOf(pair) } as Env;
     const bad = await signHex(pair, "x" + BODY); // wrong message
-    const res = await handleInteractions(interactionReq(bad, TIMESTAMP, BODY), env);
+    const res = await handleInteractions(interactionReq(bad, TIMESTAMP, BODY), env, CTX);
     expect(res.status).toBe(401);
   });
 
   it("503s when no public key is configured", async () => {
-    const res = await handleInteractions(interactionReq("00", TIMESTAMP, BODY), {} as Env);
+    const res = await handleInteractions(interactionReq("00", TIMESTAMP, BODY), {} as Env, CTX);
     expect(res.status).toBe(503);
   });
 });

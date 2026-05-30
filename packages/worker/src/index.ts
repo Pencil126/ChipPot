@@ -24,7 +24,7 @@ function corsOptions(env: Env): CorsOptions {
 }
 
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+  async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
     const cors = corsOptions(env);
 
@@ -40,7 +40,7 @@ export default {
       // Discord interactions (server-to-server; signature-verified, no CORS).
       if (url.pathname === "/interactions") {
         if (req.method !== "POST") return errorResponse(405, "method not allowed");
-        return handleInteractions(req, env);
+        return handleInteractions(req, env, ctx);
       }
 
       const pub = await publicRouter.handle(req, env);

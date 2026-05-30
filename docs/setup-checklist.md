@@ -74,6 +74,26 @@ So I can seed a realistic subscription and test button → upload → admin veri
 - [ ] billing_day = **5**, overdue_days = **3**, proof_retention_months = **24** — OK?
 - [ ] Cron time 01:00 UTC = **09:00 Asia/Taipei** daily — OK?
 
+## G. Admin-UI auth architecture (⛔ decision needed before Phase 6)
+
+Cloudflare Access protects a **hostname**. With no custom domain, the admin SPA
+(`*.pages.dev`) and the worker API (`*.workers.dev`) are **different origins**, so the
+Access session won't flow between them. The worker's Access JWT verification is built and
+fails closed, but something must hand it a valid token. Pick one (B is my recommendation
+for the no-custom-domain path):
+
+- [ ] **A. Use a custom domain after all** — `admin.<domain>` for the SPA and
+      `admin.<domain>/api/*` to the worker. One Access app covers both; `<img>` proofs just
+      work. Cleanest, but needs the domain you opted to skip.
+- [ ] **B. Pages + Access, API proxied through the same origin (Recommended)** — admin SPA
+      on `admin.pages.dev` (Pages-native Access). Its `/api/*` calls hit a **Pages Function
+      on the same origin** holding the D1/R2 bindings (I'd run the admin handlers there).
+      Same-origin ⇒ Access header present ⇒ no cross-domain issue.
+- [ ] **C. Service-token / shared-secret** SPA↔worker — simplest, weaker; not recommended
+      for a payments admin.
+
+Only affects the **admin** UI (Phase 6). Public upload + Discord flows are unaffected.
+
 ---
 
 ### How to hand it back

@@ -17,4 +17,11 @@ describe("worker fetch", () => {
     const res = await SELF.fetch("https://x/admin/users");
     expect(res.status).toBe(403);
   });
+
+  it("strips /api prefix (admin.panspace.dev/api/* -> /admin/*)", async () => {
+    const res = await SELF.fetch("https://x/api/admin/users");
+    expect(res.status).toBe(403); // routed to /admin/users, Access still required
+    const health = await SELF.fetch("https://x/api/health");
+    expect(health.status).toBe(200);
+  });
 });

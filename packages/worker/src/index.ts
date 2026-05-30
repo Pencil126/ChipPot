@@ -25,7 +25,13 @@ function corsOptions(env: Env): CorsOptions {
 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const url = new URL(req.url);
+    let url = new URL(req.url);
+    // admin.panspace.dev/api/* routes to this worker; strip /api so the same routers match.
+    if (url.pathname.startsWith("/api/")) {
+      url = new URL(req.url);
+      url.pathname = url.pathname.slice(4);
+      req = new Request(url.toString(), req);
+    }
     const cors = corsOptions(env);
 
     const pf = preflight(req, cors);

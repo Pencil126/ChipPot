@@ -17,6 +17,17 @@ D1. No HTTP, Discord, or frontend yet.
 **Tech stack:** TypeScript, Cloudflare Workers, D1, R2, Vitest + vitest-pool-workers,
 pnpm workspace, wrangler 4.x.
 
+> **Testing conventions (verified empirically — apply to ALL DB tests, every phase):**
+> 1. **Storage isolation is per test FILE, not per test.** Writes accumulate across
+>    `it` blocks within a file and roll back only at file end. Design each file to be
+>    collision-free: seed shared parents once in `beforeAll`, and vary unique keys
+>    (e.g. `period`) per `it`. (`isolatedStorage`/`singleWorker` no longer exist.)
+> 2. **Miniflare's D1 enforces FOREIGN KEY constraints.** Inserts must create parent
+>    rows first (workspace → user/plan → subscription → payment).
+> 3. **Tests that mutate use a distinct id-space** (e.g. workspace `9001`) so they never
+>    collide with the seeded workspace (id `1`) present in every file's base.
+> 4. Always `await` every storage op; consume any response bodies.
+
 ---
 
 ### Task 1: Monorepo + Worker scaffold + test harness
@@ -284,16 +295,50 @@ git commit -m "chore: scaffold pnpm monorepo + worker package with vitest-pool-w
 
 - [ ] **Step 1: Write the failing schema test**
 
-`packages/worker/test/schema.test.ts`:
+`packages/worker/test/schema.test.ts` — follows the per-file isolation + FK + distinct
+id-space conventions above (seed parents once in `beforeAll` under workspace `9001`,
+distinct `period` per `it`):
 
 ```ts
 import { env } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const TABLES = [
   "workspaces", "users", "plans", "channel_tags", "subscriptions",
   "payments", "upload_tokens", "notification_logs", "audit_logs",
 ];
+const TS = "2026-05-01T00:00:00.000Z";
+const WS = 9001;
+
+beforeAll(async () => {
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO workspaces (id, name, owner_id, channel_type, billing_day, settings, created_at, updated_at)
+       VALUES (?, 'W', 'owner', 'discord', 5, '{}', ?, ?)`
+    ).bind(WS, TS, TS),
+    env.DB.prepare(
+      `INSERT INTO users (id, workspace_id, display_name, created_at, updated_at)
+       VALUES (?, ?, 'U', ?, ?)`
+    ).bind(WS, WS, TS, TS),
+    env.DB.prepare(
+      `INSERT INTO plans (id, workspace_id, name, provider, monthly_amount, created_at, updated_at)
+       VALUES (?, ?, 'P', 'openai', 315, ?, ?)`
+    ).bind(WS, WS, TS, TS),
+    env.DB.prepare(
+      `INSERT INTO subscriptions (id, workspace_id, user_id, plan_id, start_date, billing_day, created_at, updated_at)
+       VALUES (?, ?, ?, ?, '2026-05-01', 5, ?, ?)`
+    ).bind(WS, WS, WS, WS, TS, TS),
+  ]);
+});
+
+function insertPayment(status: string, period: string) {
+  return env.DB.prepare(
+    `INSERT INTO payments
+       (workspace_id, subscription_id, period, period_start, period_end, due_date,
+        amount, status, source, created_at, updated_at)
+     VALUES (?, ?, ?, '2026-05-01', '2026-05-31', '2026-05-05', 315, ?, 'cron', ?, ?)`
+  ).bind(WS, WS, period, status, TS, TS).run();
+}
 
 describe("schema", () => {
   it("creates all tables", async () => {
@@ -305,38 +350,26 @@ describe("schema", () => {
   });
 
   it("enforces payments status CHECK", async () => {
-    await expect(
-      env.DB.prepare(
-        `INSERT INTO payments
-         (workspace_id, subscription_id, period, period_start, period_end, due_date,
-          amount, status, source, created_at, updated_at)
-         VALUES (1, 1, '2026-05', '2026-05-01', '2026-05-31', '2026-05-05',
-                 315, 'BOGUS', 'cron', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')`
-      ).run()
-    ).rejects.toThrow();
+    await expect(insertPayment("BOGUS", "2026-01")).rejects.toThrow();
+  });
+
+  it("accepts a valid payments status", async () => {
+    await expect(insertPayment("pending", "2026-02")).resolves.toBeDefined();
   });
 
   it("enforces UNIQUE(subscription_id, period) on payments", async () => {
-    const ins = (p: string) =>
-      env.DB.prepare(
-        `INSERT INTO payments
-         (workspace_id, subscription_id, period, period_start, period_end, due_date,
-          amount, status, source, created_at, updated_at)
-         VALUES (1, 999, ?, '2026-05-01', '2026-05-31', '2026-05-05',
-                 315, 'pending', 'cron', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')`
-      ).bind(p).run();
-    await ins("2026-05");
-    await expect(ins("2026-05")).rejects.toThrow();
+    await insertPayment("pending", "2026-03");
+    await expect(insertPayment("pending", "2026-03")).rejects.toThrow();
   });
 
   it("dedupes notification_logs via NOT NULL DEFAULT 0 sentinels", async () => {
     const ins = () =>
       env.DB.prepare(
         `INSERT INTO notification_logs (workspace_id, type, period, sent_at)
-         VALUES (1, 'billing_opened', '2026-05', '2026-05-05T01:00:00.000Z')`
-      ).run();
+         VALUES (?, 'billing_opened', '2026-04', '2026-04-05T01:00:00.000Z')`
+      ).bind(WS).run();
     await ins();
-    await expect(ins()).rejects.toThrow(); // plan_id/user_id/subscription_id default to 0
+    await expect(ins()).rejects.toThrow();
   });
 });
 ```
@@ -498,10 +531,9 @@ CREATE INDEX idx_audit_logs_entity ON audit_logs(workspace_id, entity_type, enti
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `pnpm --filter @chippo/worker test schema`
-Expected: PASS (4 tests). Note the schema test inserts use `subscription_id` values
-(1, 999) with `foreign_keys` not enforced by D1 by default in tests; if a future change
-enables PRAGMA foreign_keys these inserts would need a real subscription — keep them
-isolated to this file.
+Expected: PASS (5 tests). Miniflare's D1 **does** enforce FK constraints, which is why
+the test seeds real parents (workspace `9001` → user → plan → subscription) before
+inserting payments.
 
 - [ ] **Step 5: Commit**
 

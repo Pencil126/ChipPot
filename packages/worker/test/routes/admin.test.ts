@@ -1,0 +1,118 @@
+import { env } from "cloudflare:test";
+import { describe, expect, it } from "vitest";
+import { buildAdminRouter } from "../../src/routes/admin";
+import { getPayment } from "../../src/core/payments";
+import { hashToken, findValidUploadToken } from "../../src/core/tokens";
+import { nowUtcIso } from "../../src/core/time";
+import { putObject, getObject } from "../../src/core/storage";
+
+const router = buildAdminRouter();
+const IDENT = { email: "owner@example.com" };
+
+function call(method: string, path: string, body?: unknown) {
+  const init: RequestInit = { method };
+  if (body !== undefined) {
+    init.body = JSON.stringify(body);
+    init.headers = { "content-type": "application/json" };
+  }
+  return router.handle(new Request(`https://x${path}`, init), env, { identity: IDENT });
+}
+
+async function auditCount(action: string, entityId: number): Promise<number> {
+  const r = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM audit_logs WHERE action = ? AND entity_id = ? AND actor = ?"
+  ).bind(action, entityId, IDENT.email).first<{ n: number }>();
+  return r!.n;
+}
+
+// Operates on the seeded workspace 1 (plan 1 = ChatGPT 315, channel_tag 1 = LINE Pay).
+describe("admin API", () => {
+  it("creates a user, subscription (with first payment), and audits both", async () => {
+    const uRes = await call("POST", "/admin/users", { display_name: "Bob", discord_id: "d-bob" });
+    expect(uRes!.status).toBe(201);
+    const userId = ((await uRes!.json()) as any).id as number;
+    expect(await auditCount("user.create", userId)).toBe(1);
+
+    const sRes = await call("POST", "/admin/subscriptions", { user_id: userId, plan_id: 1, start_date: "2026-06-10" });
+    expect(sRes!.status).toBe(201);
+    const sBody = (await sRes!.json()) as any;
+    const subId = sBody.id as number;
+    const firstPaymentId = sBody.first_payment_id as number;
+    expect(await auditCount("subscription.create", subId)).toBe(1);
+
+    const p = await getPayment(env.DB, firstPaymentId);
+    expect(p?.status).toBe("pending");
+    expect(p?.period).toBe("2026-06");
+    expect(p?.amount).toBe(315);
+    expect(p?.due_date).toBe("2026-06-05");
+
+    // override amount, then verify
+    const oRes = await call("POST", `/admin/payments/${firstPaymentId}/amount`, { amount: 300 });
+    expect(oRes!.status).toBe(200);
+    expect((await getPayment(env.DB, firstPaymentId))?.amount).toBe(300);
+    expect(await auditCount("amount.override", firstPaymentId)).toBe(1);
+
+    const vRes = await call("POST", `/admin/payments/${firstPaymentId}/verify`, { verified_channel_tag_id: 1 });
+    expect(vRes!.status).toBe(200);
+    const vp = await getPayment(env.DB, firstPaymentId);
+    expect(vp?.status).toBe("verified");
+    expect(vp?.verified_by).toBe(IDENT.email);
+    expect(vp?.verified_channel_tag_id).toBe(1);
+    expect(await auditCount("payment.verify", firstPaymentId)).toBe(1);
+
+    // reconcile sees the verified payment
+    const rRes = await call("GET", "/admin/reconcile?period=2026-06");
+    const recon = (await rRes!.json()) as any;
+    expect(recon.status_counts.verified).toBeGreaterThanOrEqual(1);
+    expect(recon.verified_amount).toBeGreaterThanOrEqual(300);
+
+    // one-time upload link
+    const lRes = await call("POST", "/admin/upload-link", { user_id: userId, period: "2026-07", subscription_id: subId });
+    expect(lRes!.status).toBe(201);
+    const link = (await lRes!.json()) as any;
+    const tok = await findValidUploadToken(env.DB, await hashToken(link.token), nowUtcIso());
+    expect(tok?.user_id).toBe(userId);
+    expect(tok?.period).toBe("2026-07");
+
+    // manual verified payment (admin_manual)
+    const mRes = await call("POST", "/admin/payments/manual", { subscription_id: subId, period: "2026-08", status: "verified", verified_channel_tag_id: 1 });
+    expect(mRes!.status).toBe(201);
+    const mId = ((await mRes!.json()) as any).id as number;
+    const mp = await getPayment(env.DB, mId);
+    expect(mp?.status).toBe("verified");
+    expect(mp?.source).toBe("admin_manual");
+    expect(await auditCount("payment.manual", mId)).toBe(1);
+  });
+
+  it("deletes a proof (R2 + key) and audits it", async () => {
+    // seed a payment with a screenshot directly
+    const key = "1/2026-09/1/admintest.png";
+    await putObject(env.BUCKET, key, new Uint8Array([1, 2, 3]), "image/png");
+    const ins = await env.DB.prepare(
+      `INSERT INTO payments (workspace_id,subscription_id,period,period_start,period_end,due_date,amount,status,has_proof,screenshot_key,source,created_at,updated_at)
+       SELECT 1, s.id, '2026-09', '2026-09-01','2026-09-30','2026-09-05', 315, 'paid', 1, ?, 'user_web', ?, ?
+       FROM subscriptions s WHERE s.workspace_id = 1 ORDER BY s.id LIMIT 1`
+    ).bind(key, nowUtcIso(), nowUtcIso()).run();
+    const pid = ins.meta.last_row_id as number;
+
+    const res = await call("POST", `/admin/payments/${pid}/delete-proof`);
+    expect(res!.status).toBe(200);
+    const p = await getPayment(env.DB, pid);
+    expect(p?.screenshot_key).toBeNull();
+    expect(p?.proof_deleted_at).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(await getObject(env.BUCKET, key)).toBeNull();
+    expect(await auditCount("proof.delete", pid)).toBe(1);
+  });
+
+  it("rejects an invalid status transition with 409", async () => {
+    const u = await call("POST", "/admin/users", { display_name: "Carol" });
+    const uid = ((await u!.json()) as any).id as number;
+    const s = await call("POST", "/admin/subscriptions", { user_id: uid, plan_id: 1, start_date: "2026-11-01" });
+    const sid = ((await s!.json()) as any).id as number;
+    // manual upsert flips the first payment to verified (terminal)
+    const m = await call("POST", "/admin/payments/manual", { subscription_id: sid, period: "2026-11", status: "verified" });
+    const id = ((await m!.json()) as any).id as number;
+    const res = await call("POST", `/admin/payments/${id}/reject`, { rejected_reason: "x" });
+    expect(res!.status).toBe(409);
+  });
+});

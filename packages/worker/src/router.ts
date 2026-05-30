@@ -1,6 +1,8 @@
 export interface RouteCtx {
   params: Record<string, string>;
   url: URL;
+  /** Set by the /admin/* wrapper after Access verification; used as the audit actor. */
+  identity?: { email: string; sub?: string };
 }
 
 export type RouteHandler<E> = (
@@ -43,13 +45,17 @@ export class Router<E> {
   patch(pattern: string, handler: RouteHandler<E>): this { return this.add("PATCH", pattern, handler); }
   delete(pattern: string, handler: RouteHandler<E>): this { return this.add("DELETE", pattern, handler); }
 
-  async handle(req: Request, env: E): Promise<Response | null> {
+  async handle(
+    req: Request,
+    env: E,
+    extra: Omit<Partial<RouteCtx>, "params" | "url"> = {}
+  ): Promise<Response | null> {
     const url = new URL(req.url);
     const pathSegs = split(url.pathname);
     for (const route of this.routes) {
       if (route.method !== req.method) continue;
       const params = matchSegments(route.segs, pathSegs);
-      if (params) return route.handler(req, env, { params, url });
+      if (params) return route.handler(req, env, { params, url, ...extra });
     }
     return null;
   }

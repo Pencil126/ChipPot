@@ -2,6 +2,13 @@ name = "chippot"
 main = "src/index.ts"
 compatibility_date = "2025-11-01"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# Admin API: same-origin with the admin SPA (Pages) so the Access JWT reaches the worker.
+# Worker routes take precedence over Pages on the same hostname for matching paths.
+routes = [
+  { pattern = "admin.panspace.dev/api/*", zone_name = "panspace.dev" },
+]
 
 [[d1_databases]]
 binding = "DB"

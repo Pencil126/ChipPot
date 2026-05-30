@@ -8,6 +8,8 @@ import { handleImage } from "./routes/images";
 import { buildAdminRouter } from "./routes/admin";
 import { handleInteractions } from "./routes/interactions";
 import { requireAccess, AccessDenied } from "./middleware/access";
+import { runDailyTasks } from "./core/scheduled";
+import { discordNotifier } from "./adapters/discord/notify";
 
 const publicRouter = new Router<Env>()
   .get("/upload/:token", handleUploadInfo)
@@ -71,7 +73,11 @@ export default {
     }
   },
 
-  async scheduled(_event: ScheduledController, _env: Env): Promise<void> {
-    // Cron handler implemented in Phase 7.
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      runDailyTasks(env, new Date(), discordNotifier)
+        .then((s) => console.log("daily tasks", JSON.stringify(s)))
+        .catch((e) => console.error("daily tasks failed", e))
+    );
   },
 } satisfies ExportedHandler<Env>;

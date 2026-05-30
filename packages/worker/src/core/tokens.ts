@@ -15,3 +15,32 @@ export async function hashToken(raw: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", data);
   return toHex(new Uint8Array(digest));
 }
+
+export interface UploadTokenRow {
+  id: number;
+  token_hash: string;
+  workspace_id: number;
+  user_id: number;
+  period: string;
+  subscription_id: number | null;
+  used_at: string | null;
+  used_by_source: string | null;
+  revoked_at: string | null;
+  expires_at: string;
+  created_at: string;
+}
+
+/** Look up a token by its hash that is unused, unrevoked, and unexpired (at nowIso). */
+export async function findValidUploadToken(
+  db: D1Database,
+  tokenHash: string,
+  nowIso: string
+): Promise<UploadTokenRow | null> {
+  return db
+    .prepare(
+      `SELECT * FROM upload_tokens
+       WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?`
+    )
+    .bind(tokenHash, nowIso)
+    .first<UploadTokenRow>();
+}

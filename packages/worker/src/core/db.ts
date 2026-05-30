@@ -46,3 +46,28 @@ export async function getActivePlans(
     .all<PlanRow>();
   return results;
 }
+
+export interface SubscriptionChoice {
+  id: number;
+  plan_id: number;
+  plan_name: string;
+  amount: number;
+}
+
+/** Active subscriptions for a user (for the upload page's plan picker). */
+export async function listActiveSubscriptions(
+  db: D1Database,
+  workspaceId: number,
+  userId: number
+): Promise<SubscriptionChoice[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT s.id AS id, s.plan_id AS plan_id, pl.name AS plan_name, pl.monthly_amount AS amount
+       FROM subscriptions s JOIN plans pl ON pl.id = s.plan_id
+       WHERE s.workspace_id = ? AND s.user_id = ? AND s.status = 'active'
+       ORDER BY s.id`
+    )
+    .bind(workspaceId, userId)
+    .all<SubscriptionChoice>();
+  return results;
+}

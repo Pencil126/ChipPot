@@ -2,3 +2,53 @@ export interface Env {
   DB: D1Database;
   BUCKET: R2Bucket;
 }
+
+export interface WorkspaceSettings {
+  timezone: string;
+  discord_guild_id: string;
+  discord_billing_channel_id: string;
+  discord_payment_message_id: string;
+  overdue_days: number;
+  delete_discord_original_message: boolean;
+  proof_retention_months: number;
+}
+
+export const DEFAULT_SETTINGS: WorkspaceSettings = {
+  timezone: "Asia/Taipei",
+  discord_guild_id: "",
+  discord_billing_channel_id: "",
+  discord_payment_message_id: "",
+  overdue_days: 3,
+  delete_discord_original_message: false,
+  proof_retention_months: 24,
+};
+
+function intInRange(v: unknown, fallback: number, min: number, max: number): number {
+  if (v === undefined) return fallback;
+  if (typeof v !== "number" || !Number.isInteger(v) || v < min || v > max) {
+    throw new Error(`invalid settings number: ${String(v)}`);
+  }
+  return v;
+}
+
+function str(v: unknown, fallback: string): string {
+  return typeof v === "string" ? v : fallback;
+}
+
+export function parseSettings(json: string): WorkspaceSettings {
+  const raw = JSON.parse(json) as Record<string, unknown>;
+  return {
+    timezone: str(raw.timezone, DEFAULT_SETTINGS.timezone),
+    discord_guild_id: str(raw.discord_guild_id, ""),
+    discord_billing_channel_id: str(raw.discord_billing_channel_id, ""),
+    discord_payment_message_id: str(raw.discord_payment_message_id, ""),
+    overdue_days: intInRange(raw.overdue_days, DEFAULT_SETTINGS.overdue_days, 0, 60),
+    delete_discord_original_message:
+      typeof raw.delete_discord_original_message === "boolean"
+        ? raw.delete_discord_original_message
+        : DEFAULT_SETTINGS.delete_discord_original_message,
+    proof_retention_months: intInRange(
+      raw.proof_retention_months, DEFAULT_SETTINGS.proof_retention_months, 1, 600
+    ),
+  };
+}

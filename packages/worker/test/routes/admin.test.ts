@@ -174,6 +174,8 @@ describe("admin billing/initiate + declared channel", () => {
   it("billing/initiate validates the period and amounts", async () => {
     expect((await call("POST", "/admin/billing/initiate", { period: "2027-13", amounts: [] }))!.status).toBe(400);
     expect((await call("POST", "/admin/billing/initiate", { period: "2027-09" }))!.status).toBe(400);
+    expect((await call("POST", "/admin/billing/initiate", { period: "2027-09", amounts: [null] }))!.status).toBe(400);
+    expect((await call("POST", "/admin/billing/initiate", { period: "2027-09", amounts: [{ plan_id: 1, amount: -1 }] }))!.status).toBe(400);
   });
 
   it("verify pre-fills verified_channel_tag_id from declared; list shows declared name", async () => {

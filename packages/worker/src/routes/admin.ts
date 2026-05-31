@@ -87,7 +87,7 @@ async function billingInitiate(req: Request, env: Env, ctx: RouteCtx): Promise<R
   if (!PERIOD_RE.test(period)) return errorResponse(400, "period must be YYYY-MM");
   if (!Array.isArray(b?.amounts)) return errorResponse(400, "amounts is required");
   for (const a of b!.amounts) {
-    if (!Number.isInteger(a.plan_id) || !Number.isInteger(a.amount) || a.amount < 0) {
+    if (!a || typeof a !== "object" || !Number.isInteger(a.plan_id) || !Number.isInteger(a.amount) || a.amount < 0) {
       return errorResponse(400, "each amount needs an integer plan_id and non-negative amount");
     }
   }
@@ -276,7 +276,7 @@ async function listPayments(_req: Request, env: Env, ctx: RouteCtx): Promise<Res
 async function verifyPaymentHandler(req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
   const id = Number(ctx.params.id);
   const before = await getPayment(env.DB, id);
-  if (!before) return errorResponse(404, "not found");
+  if (!before || before.workspace_id !== wsId(ctx)) return errorResponse(404, "not found");
   const b = await readJson<{ verified_channel_tag_id?: number }>(req) ?? {};
   // Default the verified channel to the user's declared channel when the admin doesn't override.
   const tagId = b.verified_channel_tag_id ?? before.declared_channel_tag_id ?? null;

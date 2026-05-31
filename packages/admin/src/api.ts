@@ -46,6 +46,9 @@ export const api = {
   updateWorkspace: (b: unknown) => req("PATCH", "/workspace", b),
   rebuildPaymentMessage: () => req<{ message_id: string }>("POST", "/discord/payment-message"),
   reconcile: (period: string) => req<Reconcile>("GET", `/reconcile${qs({ period })}`),
+  notifications: (period: string) => req<{ billing_opened: { sent_at: string } | null; overdue: { sent_at: string } | null }>("GET", `/notifications${qs({ period })}`),
+  resendNotification: (type: string, period: string) => req<{ sent?: boolean; count?: number }>("POST", "/notifications/resend", { type, period }),
+  resetNotification: (type: string, period: string) => req<{ deleted: number }>("POST", "/notifications/reset", { type, period }),
   initiateBilling: (b: { period: string; amounts: { plan_id: number; amount: number }[] }) =>
     req<{ sent: boolean; updated_plans: number; updated_payments: number }>("POST", "/billing/initiate", b),
   payments: (p?: { period?: string; status?: string }) => req<{ payments: Payment[] }>("GET", `/payments${qs(p)}`),

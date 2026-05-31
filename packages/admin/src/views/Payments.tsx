@@ -32,10 +32,10 @@ export function Payments() {
       {list.error && <div className="error-banner">{list.error}</div>}
       <Card title="繳費紀錄">
         <table>
-          <thead><tr><th>成員</th><th>方案</th><th>期別</th><th className="right">金額</th><th>狀態</th><th>憑證</th><th>來源</th></tr></thead>
+          <thead><tr><th>成員</th><th>方案</th><th>期別</th><th className="right">金額</th><th>狀態</th><th>憑證</th><th>來源</th><th></th></tr></thead>
           <tbody>
-            {list.loading && <tr><td colSpan={7}><Empty>載入中…</Empty></td></tr>}
-            {list.data?.payments.length === 0 && <tr><td colSpan={7}><Empty>沒有符合的紀錄</Empty></td></tr>}
+            {list.loading && <tr><td colSpan={8}><Empty>載入中…</Empty></td></tr>}
+            {list.data?.payments.length === 0 && <tr><td colSpan={8}><Empty>沒有符合的紀錄</Empty></td></tr>}
             {list.data?.payments.map((p) => (
               <tr key={p.id} className="click" onClick={() => setSelected(p)}>
                 <td>{p.user_name}</td>
@@ -45,6 +45,9 @@ export function Payments() {
                 <td><StatusBadge status={p.status} /></td>
                 <td>{p.has_proof ? <span className="proof-yes">✅ 有截圖</span> : <span className="proof-no">⚠️ 純聲明</span>}</td>
                 <td style={{ fontSize: 12.5, color: "var(--muted)" }}>{p.source}</td>
+                <td className="right" onClick={(e) => e.stopPropagation()}>
+                  {["pending", "paid", "rejected"].includes(p.status) && <QuickVerify id={p.id} onDone={reload} />}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -62,6 +65,21 @@ export function Payments() {
       {showManual && <ManualModal tags={tags.data?.channel_tags ?? []} onClose={() => setShowManual(false)} onDone={() => { setShowManual(false); reload(); }} />}
       {showLink && <LinkModal onClose={() => setShowLink(false)} />}
     </>
+  );
+}
+
+function QuickVerify({ id, onDone }: { id: number; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(false);
+  async function run() {
+    setBusy(true); setErr(false);
+    try { await api.verify(id, null); onDone(); }
+    catch { setErr(true); setBusy(false); }
+  }
+  return (
+    <button className="btn" disabled={busy} onClick={run} title="標記已驗證（帶入申報渠道）">
+      {busy ? "…" : err ? "✗ 重試" : "✅ 驗證"}
+    </button>
   );
 }
 

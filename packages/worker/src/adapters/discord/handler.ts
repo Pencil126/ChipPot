@@ -4,17 +4,18 @@ import { json } from "../../http";
 import { taipeiPeriod } from "../../core/time";
 import {
   getWorkspaceIdByGuild, getUserByDiscordId, listActiveSubscriptions,
-  listActiveChannelTags, listSettleablePayments,
+  listActiveChannelTags, listSettleablePayments, listUnboundUsers, bindDiscordId,
 } from "../../core/db";
 import { ensurePeriodPayment, initiateBillingOpened } from "../../core/billing";
 import { settleUserPeriod, assertImageOk, extForContentType, InvalidImage } from "../../core/storage";
+import { writeAudit } from "../../core/audit";
 import { discordNotifier } from "./notify";
 import { editOriginalResponse } from "./api";
 import {
   IT_COMMAND, IT_COMPONENT, IT_AUTOCOMPLETE, IT_MODAL_SUBMIT,
   RT_MESSAGE, RT_DEFERRED, RT_UPDATE_MESSAGE, RT_AUTOCOMPLETE, FLAG_EPHEMERAL,
-  PAY_BUTTON_PREFIX, PAY_SELECT_PREFIX, INITIATE_MODAL_PREFIX,
-  channelSelectRow, initiateModal,
+  PAY_BUTTON_PREFIX, PAY_SELECT_PREFIX, INITIATE_MODAL_PREFIX, BIND_SELECT_PREFIX,
+  channelSelectRow, initiateModal, bindSelectRow,
 } from "./commands";
 
 export interface DiscordAttachment {
@@ -87,18 +88,27 @@ async function handleAutocomplete(i: DiscordInteraction, env: Env): Promise<Resp
 
 // ── Shared member resolution ─────────────────────────────────────────────────
 
-/** Returns { ws, userId } or an ephemeral error Response. */
-async function resolveMember(
+/** Resolve guild→workspace + the caller's Discord id (no membership requirement). */
+async function resolveWs(
   i: DiscordInteraction, env: Env
-): Promise<{ ws: number; userId: number } | Response> {
+): Promise<{ ws: number; discordId: string } | Response> {
   if (!i.guild_id) return ephemeral("此互動需在伺服器內使用。");
   const ws = await getWorkspaceIdByGuild(env.DB, i.guild_id);
   if (!ws) return ephemeral("此伺服器尚未設定繳費系統。");
   const did = discordUserId(i);
   if (!did) return ephemeral("無法辨識你的 Discord 帳號。");
-  const user = await getUserByDiscordId(env.DB, ws, did);
+  return { ws, discordId: did };
+}
+
+/** Resolve a registered (bound) member, or an ephemeral error Response. */
+async function resolveMember(
+  i: DiscordInteraction, env: Env
+): Promise<{ ws: number; userId: number } | Response> {
+  const r = await resolveWs(i, env);
+  if (r instanceof Response) return r;
+  const user = await getUserByDiscordId(env.DB, r.ws, r.discordId);
   if (!user) return ephemeral("你還不是登記的成員，請聯絡管理員新增。");
-  return { ws, userId: user.id };
+  return { ws: r.ws, userId: user.id };
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────────
@@ -110,6 +120,7 @@ function handleCommand(i: DiscordInteraction, env: Env, ctx: ExecutionContext): 
     return json({ type: RT_DEFERRED, data: { flags: FLAG_EPHEMERAL } });
   }
   if (i.data?.name === "發起繳費") return handleInitiateCommand(i, env);
+  if (i.data?.name === "綁定") return handleBindCommand(i, env);
   return ephemeral("未知指令。");
 }
 
@@ -137,9 +148,12 @@ function isDiscordCdnUrl(url: string): boolean {
 
 /** `/繳費`: settle ALL of the user's period subs. 渠道 / 截圖 / 備註 — at least one. */
 async function computePayResult(i: DiscordInteraction, env: Env): Promise<string> {
-  const m = await resolveMember(i, env);
+  const m = await resolveWs(i, env);
   if (m instanceof Response) return ((await m.json()) as any).data.content;
-  const { ws, userId } = m;
+  const { ws, discordId } = m;
+  const user = await getUserByDiscordId(env.DB, ws, discordId);
+  if (!user) return "你還沒綁定 Discord 帳號，請點「繳費」按鈕或用 `/綁定` 完成綁定後再試。";
+  const userId = user.id;
 
   const subs = await listActiveSubscriptions(env.DB, ws, userId);
   if (subs.length === 0) return "你目前沒有有效訂閱。";
@@ -253,39 +267,105 @@ async function deferredInitiate(i: DiscordInteraction, env: Env): Promise<void> 
 
 function handleComponent(i: DiscordInteraction, env: Env): Promise<Response> {
   const cid = i.data?.custom_id ?? "";
+  if (cid.startsWith(BIND_SELECT_PREFIX)) return handleBindSelect(i, env);
   if (cid.startsWith(PAY_SELECT_PREFIX)) return handlePaySelect(i, env);
   if (cid.startsWith(PAY_BUTTON_PREFIX)) return handlePayButton(i, env);
   return Promise.resolve(ephemeral("未支援的按鈕。"));
 }
 
-async function handlePayButton(i: DiscordInteraction, env: Env): Promise<Response> {
-  const m = await resolveMember(i, env);
-  if (m instanceof Response) return m;
-  const { ws, userId } = m;
-
-  const subs = await listActiveSubscriptions(env.DB, ws, userId);
-  if (subs.length === 0) return ephemeral("你目前沒有有效訂閱。");
-
-  const period = taipeiPeriod();
-  // Ensure rows exist so settleable vs already-paid is accurate.
-  for (const s of subs) await ensurePeriodPayment(env.DB, s.id, period);
-  const settleable = await listSettleablePayments(env.DB, ws, userId, period);
-  if (settleable.length === 0) return ephemeral("✅ 你本期已登記繳費，無需重複操作。");
-
-  const tags = await listActiveChannelTags(env.DB, ws);
-  if (tags.length === 0) {
-    return ephemeral("管理員尚未設定繳費渠道，請改用 `/繳費` 指令（可附截圖或備註）。");
-  }
-  const total = settleable.reduce((s, r) => s + r.amount, 0);
-  const lines = settleable.map((r) => `・${r.plan_name}：NT$${r.amount.toLocaleString()}`).join("\n");
+async function handleBindCommand(i: DiscordInteraction, env: Env): Promise<Response> {
+  const r = await resolveWs(i, env);
+  if (r instanceof Response) return r;
+  const { ws, discordId } = r;
+  const existing = await getUserByDiscordId(env.DB, ws, discordId);
+  if (existing) return ephemeral(`你已綁定為 ${existing.display_name}。`);
+  const unbound = await listUnboundUsers(env.DB, ws);
+  if (unbound.length === 0) return ephemeral("目前沒有可綁定的成員，請聯絡管理員。");
   return json({
     type: RT_MESSAGE,
     data: {
       flags: FLAG_EPHEMERAL,
-      content: `本期（${period}）應繳：\n${lines}\n**合計 NT$${total.toLocaleString()}**\n\n請選擇繳費渠道送出。想附截圖／備註？改用 \`/繳費\`。`,
-      components: [channelSelectRow(ws, period, tags)],
+      content: "請選擇你的名字以綁定 Discord 帳號（只列出尚未綁定的成員）。",
+      components: [bindSelectRow(ws, "cmd", unbound)],
     },
   });
+}
+
+async function handleBindSelect(i: DiscordInteraction, env: Env): Promise<Response> {
+  const r = await resolveWs(i, env);
+  if (r instanceof Response) return r;
+  const { ws, discordId } = r;
+  const updateErr = (content: string) =>
+    json({ type: RT_UPDATE_MESSAGE, data: { content, components: [] } });
+
+  const parts = (i.data?.custom_id ?? "").split(":"); // chippot:bind:<ws>:<origin>
+  const origin = parts[3];
+  if (Number(parts[2]) !== ws || (origin !== "pay" && origin !== "cmd")) {
+    return updateErr("這個綁定選單已失效，請重新操作。");
+  }
+  const targetUserId = Number(i.data?.values?.[0]);
+  if (!Number.isInteger(targetUserId)) return updateErr("選擇無效，請重新操作。");
+
+  const result = await bindDiscordId(env, ws, targetUserId, discordId);
+  if (result.status === "already_bound_other") return updateErr(`你的 Discord 帳號已綁定為 ${result.boundName}。`);
+  if (result.status === "name_taken") return updateErr("這個名字剛被綁定了，請重新操作。");
+  if (result.status === "not_found") return updateErr("找不到該成員，請重新操作。");
+
+  await writeAudit(env.DB, {
+    workspaceId: ws, actor: `discord:${discordId}`, action: "member.bind",
+    entityType: "user", entityId: targetUserId, after: { discord_id: discordId },
+  });
+
+  if (origin === "pay") {
+    const prompt = await buildPayPrompt(env, ws, targetUserId);
+    return json({
+      type: RT_UPDATE_MESSAGE,
+      data: { content: `✅ 已綁定為 ${result.boundName}。\n${prompt.content}`, components: prompt.components },
+    });
+  }
+  return updateErr(`✅ 已綁定為 ${result.boundName}。之後點「繳費」按鈕或用 \`/繳費\` 即可登記繳費。`);
+}
+
+/** The pay prompt shown after the button (or after a button-originated bind). */
+async function buildPayPrompt(
+  env: Env, ws: number, userId: number
+): Promise<{ content: string; components: unknown[] }> {
+  const subs = await listActiveSubscriptions(env.DB, ws, userId);
+  if (subs.length === 0) return { content: "你目前沒有有效訂閱。", components: [] };
+  const period = taipeiPeriod();
+  for (const s of subs) await ensurePeriodPayment(env.DB, s.id, period);
+  const settleable = await listSettleablePayments(env.DB, ws, userId, period);
+  if (settleable.length === 0) return { content: "✅ 你本期已登記繳費，無需重複操作。", components: [] };
+  const tags = await listActiveChannelTags(env.DB, ws);
+  if (tags.length === 0) return { content: "管理員尚未設定繳費渠道，請改用 `/繳費` 指令（可附截圖或備註）。", components: [] };
+  const total = settleable.reduce((s, r) => s + r.amount, 0);
+  const lines = settleable.map((r) => `・${r.plan_name}：NT$${r.amount.toLocaleString()}`).join("\n");
+  return {
+    content: `本期（${period}）應繳：\n${lines}\n**合計 NT$${total.toLocaleString()}**\n\n請選擇繳費渠道送出。想附截圖／備註？改用 \`/繳費\`。`,
+    components: [channelSelectRow(ws, period, tags)],
+  };
+}
+
+async function handlePayButton(i: DiscordInteraction, env: Env): Promise<Response> {
+  const r = await resolveWs(i, env);
+  if (r instanceof Response) return r;
+  const { ws, discordId } = r;
+  const user = await getUserByDiscordId(env.DB, ws, discordId);
+  if (!user) {
+    // Unbound: offer self-bind (origin=pay) if there are unbound members.
+    const unbound = await listUnboundUsers(env.DB, ws);
+    if (unbound.length === 0) return ephemeral("你還不是登記的成員，請聯絡管理員新增。");
+    return json({
+      type: RT_MESSAGE,
+      data: {
+        flags: FLAG_EPHEMERAL,
+        content: "請選擇你的名字以綁定 Discord 帳號（只列出尚未綁定的成員）。",
+        components: [bindSelectRow(ws, "pay", unbound)],
+      },
+    });
+  }
+  const prompt = await buildPayPrompt(env, ws, user.id);
+  return json({ type: RT_MESSAGE, data: { flags: FLAG_EPHEMERAL, content: prompt.content, components: prompt.components } });
 }
 
 const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;

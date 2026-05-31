@@ -9,7 +9,8 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "migrate:local": "wrangler d1 migrations apply chippot-db --local",
-    "migrate:remote": "wrangler d1 migrations apply chippot-db --remote"
+    "migrate:remote": "wrangler d1 migrations apply chippot-db --remote",
+    "register": "node scripts/register-commands.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.16.10",

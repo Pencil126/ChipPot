@@ -76,4 +76,12 @@ describe("schema", () => {
     await ins();
     await expect(ins()).rejects.toThrow(); // plan_id/user_id/subscription_id default to 0
   });
+
+  it("0004 adds declared_channel_tag_id and drops the screenshot_key unique index", async () => {
+    const cols = await env.DB.prepare("PRAGMA table_info(payments)").all<{ name: string }>();
+    expect(cols.results.map((c) => c.name)).toContain("declared_channel_tag_id");
+
+    const idx = await env.DB.prepare("PRAGMA index_list(payments)").all<{ name: string }>();
+    expect(idx.results.map((i) => i.name)).not.toContain("idx_payments_screenshot_key");
+  });
 });

@@ -70,10 +70,10 @@ export async function runDailyTasks(
       }
     }
 
-    // 3. Overdue reminders: one batched message per period that has overdue pending payments.
+    // 3. Overdue reminders: one batched message per period with unpaid (pending/rejected) payments.
     if (canNotify) {
       const periods = await env.DB
-        .prepare("SELECT DISTINCT period FROM payments WHERE workspace_id = ? AND status = 'pending'")
+        .prepare("SELECT DISTINCT period FROM payments WHERE workspace_id = ? AND status IN ('pending','rejected')")
         .bind(ws.id)
         .all<{ period: string }>();
       for (const { period: pd } of periods.results) {
@@ -90,7 +90,8 @@ export async function runDailyTasks(
 
 /**
  * Send the overdue reminder for ONE period as a single batched public message listing every
- * unpaid member (tag once + their plans + total), deduped per (ws, period). Cron uses
+ * unpaid member — pending OR rejected (a rejected submission still owes) — tagged once with
+ * their plans + total, deduped per (ws, period). Cron uses
  * force=false (only fires when ≥1 member is past overdue_days, claim-then-send). The admin
  * resend uses force=true (lists ALL unpaid members regardless of overdue_days; clears the
  * dedup slot first so it always re-sends). Returns the number of members notified (0 = nothing
@@ -118,7 +119,7 @@ export async function sendOverdueForPeriod(
        JOIN subscriptions s ON s.id = p.subscription_id
        JOIN users u ON u.id = s.user_id
        JOIN plans pl ON pl.id = s.plan_id
-       WHERE p.workspace_id = ? AND p.period = ? AND p.status = 'pending'
+       WHERE p.workspace_id = ? AND p.period = ? AND p.status IN ('pending','rejected')
        ORDER BY u.id, pl.id`
     )
     .bind(workspaceId, period)

@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
-import { runDailyTasks } from "../../src/core/scheduled";
+import { runDailyTasks, sendOverdueForPeriod } from "../../src/core/scheduled";
 import type { Notifier, PlanOpenLine, OverduePerson } from "../../src/core/notify";
 import { getObject, putObject } from "../../src/core/storage";
 
@@ -68,5 +68,21 @@ describe("runDailyTasks", () => {
     expect(s.proofsDeleted).toBe(0);
     expect(sent.billing.length).toBe(before.billing);
     expect(sent.overdue.length).toBe(before.overdue);
+  });
+});
+
+describe("sendOverdueForPeriod includes rejected payments", () => {
+  it("force-resend lists a member whose payment was rejected (still owes)", async () => {
+    // 王竣翔-style: a 2099-01 payment that the admin rejected → still unpaid.
+    await env.DB.prepare(
+      `INSERT INTO payments (workspace_id,subscription_id,period,period_start,period_end,due_date,amount,status,source,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(WS, WS, "2099-01", "2099-01-01", "2099-01-31", "2099-01-05", 315, "rejected", "user_slash", TS, TS).run();
+
+    const before = sent.overdue.length;
+    const count = await sendOverdueForPeriod(env, WS, "2099-01", notifier, { force: true });
+    expect(count).toBe(1);
+    expect(sent.overdue.length).toBe(before + 1);
+    expect(sent.overdue.at(-1)!.people[0]).toMatchObject({ discord_id: "d-9010" });
   });
 });

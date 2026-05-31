@@ -12,7 +12,6 @@ describe("seed", () => {
     expect(settings.timezone).toBe("Asia/Taipei");
     expect(settings.overdue_days).toBe(3);
     expect(settings.proof_retention_months).toBe(24);
-    expect(settings.delete_discord_original_message).toBe(false);
   });
 
   it("seeds the three plans with correct TWD prices", async () => {

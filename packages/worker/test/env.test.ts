@@ -11,12 +11,10 @@ describe("parseSettings", () => {
     const s = parseSettings(JSON.stringify({
       overdue_days: 5,
       proof_retention_months: 12,
-      delete_discord_original_message: true,
       discord_guild_id: "123",
     }));
     expect(s.overdue_days).toBe(5);
     expect(s.proof_retention_months).toBe(12);
-    expect(s.delete_discord_original_message).toBe(true);
     expect(s.discord_guild_id).toBe("123");
     expect(s.timezone).toBe("Asia/Taipei");
   });

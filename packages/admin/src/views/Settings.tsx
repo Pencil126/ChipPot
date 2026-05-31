@@ -46,7 +46,6 @@ export function Settings() {
   const [billingDay, setBillingDay] = useState("5");
   const [overdue, setOverdue] = useState("3");
   const [retention, setRetention] = useState("24");
-  const [delMsg, setDelMsg] = useState(false);
   const [guild, setGuild] = useState("");
   const [channel, setChannel] = useState("");
   const [adminIds, setAdminIds] = useState("");
@@ -63,7 +62,6 @@ export function Settings() {
     setBillingDay(String(w.billing_day));
     setOverdue(String(w.settings.overdue_days));
     setRetention(String(w.settings.proof_retention_months));
-    setDelMsg(!!w.settings.delete_discord_original_message);
     setGuild(w.settings.discord_guild_id ?? "");
     setChannel(w.settings.discord_billing_channel_id ?? "");
     setAdminIds((w.settings.admin_discord_ids ?? []).join(", "));
@@ -80,7 +78,6 @@ export function Settings() {
         settings: {
           overdue_days: Number(overdue),
           proof_retention_months: Number(retention),
-          delete_discord_original_message: delMsg,
           discord_guild_id: guild,
           discord_billing_channel_id: channel,
           admin_discord_ids: adminIds.split(",").map((s) => s.trim()).filter(Boolean),
@@ -117,9 +114,6 @@ export function Settings() {
         <TemplateField label="逾期催繳文字（{period} {count} {list}）" value={tplOverdue} onChange={setTplOverdue} allowed={OVERDUE_KEYS} sample={samples.overdue} disabled={busy} rows={4} />
         <TemplateField label="開繳通知文字（{period} {plans} {total}）" value={tplBilling} onChange={setTplBilling} allowed={BILLING_KEYS} sample={samples.billing} disabled={busy} rows={4} />
         <TemplateField label="常駐繳費訊息文字（{period}）" value={tplMessage} onChange={setTplMessage} allowed={MSG_KEYS} sample={samples.message} disabled={busy} rows={3} />
-        <label style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16 }}>
-          <input type="checkbox" checked={delMsg} onChange={(e) => setDelMsg(e.target.checked)} disabled={busy} /> 刪除 Discord 原始繳費訊息
-        </label>
         {tplInvalid && <div className="error-banner" style={{ marginBottom: 10 }}>有未知的佔位符，請修正後再儲存。</div>}
         <button className="btn btn--primary" onClick={save} disabled={busy || tplInvalid}>儲存設定</button>
 

@@ -20,7 +20,6 @@ export interface WorkspaceSettings {
   discord_billing_channel_id: string;
   discord_payment_message_id: string;
   overdue_days: number;
-  delete_discord_original_message: boolean;
   proof_retention_months: number;
   admin_discord_ids: string[];
   overdue_template: string;
@@ -34,7 +33,6 @@ export const DEFAULT_SETTINGS: WorkspaceSettings = {
   discord_billing_channel_id: "",
   discord_payment_message_id: "",
   overdue_days: 3,
-  delete_discord_original_message: false,
   proof_retention_months: 24,
   admin_discord_ids: [],
   overdue_template: "⏰ **{period} 催繳**\n以下夥伴本期尚有未繳（共 {count} 位），請儘速處理 🙏\n{list}",
@@ -66,10 +64,6 @@ export function parseSettings(json: string): WorkspaceSettings {
     discord_billing_channel_id: str(raw.discord_billing_channel_id, ""),
     discord_payment_message_id: str(raw.discord_payment_message_id, ""),
     overdue_days: intInRange(raw.overdue_days, DEFAULT_SETTINGS.overdue_days, 0, 60),
-    delete_discord_original_message:
-      typeof raw.delete_discord_original_message === "boolean"
-        ? raw.delete_discord_original_message
-        : DEFAULT_SETTINGS.delete_discord_original_message,
     proof_retention_months: intInRange(
       raw.proof_retention_months, DEFAULT_SETTINGS.proof_retention_months, 1, 600
     ),

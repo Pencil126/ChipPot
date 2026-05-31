@@ -12,14 +12,9 @@
 
 ---
 
-## ⚠️ One deviation from the spec — confirm before/at Phase 3
+## Decision: no price toggle (owner, 2026-05-31)
 
-The spec puts the **"同時更新方案定價" toggle** on *both* the Discord `/發起繳費` modal and the admin UI. **Discord modals only contain text inputs — they cannot render a real checkbox**, and with up to 5 plans a modal is already at its 5-row limit. So this plan implements:
-
-- **Discord `/發起繳費`**: amounts only, **always `updatePlanPrices = true`** (matches the spec's own rationale "在 Discord 發起＝順手改定價，下期沿用", which is the toggle's default-on state).
-- **Admin UI 發起繳費**: amounts **plus a real checkbox** toggle (default on) — this is where you get the "只調當月、不動定價" option.
-
-If you instead want the toggle reachable from Discord, the fallback is a free-text `y/n` field in the modal (uglier, eats one of the 5 rows). This plan assumes the checkbox-in-admin approach. **Flag at the Phase 2/3 boundary.**
+The spec floated a "同時更新方案定價" toggle (temporary-month vs permanent price). **The owner removed it:** because prices float, any change to a plan's amount is always the plan's new price. So `initiateBillingOpened` **always writes `plans.monthly_amount`** and always rewrites this period's pending payment amounts — no toggle, no `updatePlanPrices` parameter, no checkbox in Discord or the admin UI. (Paid/verified rows stay frozen regardless.)
 
 ---
 
@@ -798,7 +793,7 @@ describe("initiateBillingOpened", () => {
   it("updates prices + pending amounts, freezes paid rows, notifies, claims the slot", async () => {
     const r = await initiateBillingOpened(
       env, WS, PERIOD,
-      { amounts: [{ plan_id: PLAN_A, amount: 400 }, { plan_id: PLAN_B, amount: 300 }], updatePlanPrices: true },
+      { amounts: [{ plan_id: PLAN_A, amount: 400 }, { plan_id: PLAN_B, amount: 300 }] },
       "owner@x", notifier
     );
     expect(r.sent).toBe(true);
@@ -821,19 +816,6 @@ describe("initiateBillingOpened", () => {
     // slot already claimed by the prior test -> claimNotification now returns false
     const won = await claimNotification(env.DB, { workspaceId: WS, type: "billing_opened", period: PERIOD });
     expect(won).toBe(false);
-  });
-
-  it("updatePlanPrices=false leaves plan prices unchanged but still adjusts pending amounts", async () => {
-    const r = await initiateBillingOpened(
-      env, WS, "2027-06",
-      { amounts: [{ plan_id: PLAN_A, amount: 999 }], updatePlanPrices: false },
-      "owner@x", notifier
-    );
-    expect(r.sent).toBe(true);
-    const pa = await env.DB.prepare("SELECT monthly_amount FROM plans WHERE id=?").bind(PLAN_A).first<{ monthly_amount: number }>();
-    expect(pa?.monthly_amount).toBe(400); // unchanged from the previous test
-    const pend = await env.DB.prepare("SELECT amount FROM payments WHERE subscription_id=? AND period='2027-06'").bind(SUB_A).first<{ amount: number }>();
-    expect(pend?.amount).toBe(999);
   });
 });
 ```
@@ -864,7 +846,6 @@ export interface PlanAmount {
 
 export interface InitiateInput {
   amounts: PlanAmount[];
-  updatePlanPrices: boolean;
 }
 
 export interface InitiateResult {
@@ -874,10 +855,11 @@ export interface InitiateResult {
 }
 
 /**
- * Manually "發起繳費" for a period: optionally write the confirmed amounts back as the plans'
- * new prices, always rewrite this period's still-PENDING payment amounts (paid/verified are
- * frozen), then post the billing-opened notice — claiming the same dedup slot the cron uses,
- * so a manual trigger and the cron can never both notify.
+ * Manually "發起繳費" for a period: write the confirmed amounts back as the plans' new prices
+ * (any change is always the new price — owner decision, no temporary-month mode), rewrite this
+ * period's still-PENDING payment amounts (paid/verified are frozen), then post the
+ * billing-opened notice — claiming the same dedup slot the cron uses, so a manual trigger and
+ * the cron can never both notify.
  */
 export async function initiateBillingOpened(
   env: Env,
@@ -904,7 +886,7 @@ export async function initiateBillingOpened(
     if (!Number.isInteger(a.amount) || a.amount < 0) continue;
     amountByPlan.set(a.plan_id, a.amount);
 
-    if (input.updatePlanPrices && a.amount !== plan.monthly_amount) {
+    if (a.amount !== plan.monthly_amount) {
       await env.DB.prepare("UPDATE plans SET monthly_amount = ?, updated_at = ? WHERE id = ?")
         .bind(a.amount, now, a.plan_id).run();
       await writeAudit(env.DB, {
@@ -956,7 +938,7 @@ export async function initiateBillingOpened(
 
   await writeAudit(env.DB, {
     workspaceId, actor, action: "billing.initiate", entityType: "workspace", entityId: workspaceId,
-    after: { period, updatePlanPrices: input.updatePlanPrices, updatedPlans, updatedPayments, sent },
+    after: { period, updatedPlans, updatedPayments, sent },
   });
 
   return { sent, updatedPlans, updatedPayments };
@@ -1818,8 +1800,7 @@ async function deferredInitiate(i: DiscordInteraction, env: Env): Promise<void> 
           }
         }
       }
-      // Discord 發起 = always update plan prices (the toggle's default; modals can't hold a checkbox).
-      const r = await initiateBillingOpened(env, ws, period, { amounts, updatePlanPrices: true }, `discord:${discordUserId(i)}`, discordNotifier);
+      const r = await initiateBillingOpened(env, ws, period, { amounts }, `discord:${discordUserId(i)}`, discordNotifier);
       content = r.sent
         ? `✅ 已發起 ${period} 繳費並發出通知（更新 ${r.updatedPlans} 個方案定價、${r.updatedPayments} 筆待繳金額）。`
         : `✅ 已更新本期金額（更新 ${r.updatedPlans} 個方案、${r.updatedPayments} 筆待繳）。本期通知先前已發送，未重複發送。`;
@@ -2147,7 +2128,7 @@ Add the handler:
 ```ts
 async function billingInitiate(req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
   const ws = wsId(ctx);
-  const b = await readJson<{ period?: string; amounts?: { plan_id: number; amount: number }[]; update_plan_prices?: boolean }>(req);
+  const b = await readJson<{ period?: string; amounts?: { plan_id: number; amount: number }[] }>(req);
   const period = b?.period ?? taipeiPeriod();
   if (!PERIOD_RE.test(period)) return errorResponse(400, "period must be YYYY-MM");
   if (!Array.isArray(b?.amounts)) return errorResponse(400, "amounts is required");
@@ -2157,9 +2138,7 @@ async function billingInitiate(req: Request, env: Env, ctx: RouteCtx): Promise<R
     }
   }
   const r = await initiateBillingOpened(
-    env, ws, period,
-    { amounts: b!.amounts, updatePlanPrices: b!.update_plan_prices !== false },
-    actorOf(ctx), discordNotifier
+    env, ws, period, { amounts: b!.amounts }, actorOf(ctx), discordNotifier
   );
   return json({ ok: true, sent: r.sent, updated_plans: r.updatedPlans, updated_payments: r.updatedPayments });
 }
@@ -2325,7 +2304,7 @@ git commit -m "feat(web): channel selector + settle-all + screenshot/note/channe
 Add to `Payment`: `declared_channel_tag_id: number | null; declared_channel_tag_name: string | null;`. Add API methods:
 
 ```ts
-  initiateBilling: (b: { period: string; amounts: { plan_id: number; amount: number }[]; update_plan_prices: boolean }) =>
+  initiateBilling: (b: { period: string; amounts: { plan_id: number; amount: number }[] }) =>
     req<{ sent: boolean; updated_plans: number; updated_payments: number }>("POST", "/billing/initiate", b),
 ```
 
@@ -2360,7 +2339,6 @@ function InitiateBilling() {
 function InitiateModal({ plans, onClose }: { plans: { id: number; name: string; monthly_amount: number }[]; onClose: () => void }) {
   const [period, setPeriod] = useState(currentPeriod());
   const [amounts, setAmounts] = useState<Record<number, string>>(() => Object.fromEntries(plans.map((p) => [p.id, String(p.monthly_amount)])));
-  const [updatePrices, setUpdatePrices] = useState(true);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -2370,7 +2348,6 @@ function InitiateModal({ plans, onClose }: { plans: { id: number; name: string; 
       const r = await api.initiateBilling({
         period,
         amounts: plans.map((p) => ({ plan_id: p.id, amount: Number(amounts[p.id]) })),
-        update_plan_prices: updatePrices,
       });
       setMsg(r.sent ? `✓ 已發出通知（更新 ${r.updated_plans} 方案 / ${r.updated_payments} 筆）` : `✓ 已更新金額（通知先前已發送）`);
     } catch (e) { setErr((e as Error).message); }
@@ -2380,15 +2357,13 @@ function InitiateModal({ plans, onClose }: { plans: { id: number; name: string; 
     <Modal title="發起繳費" onClose={onClose}>
       {err && <div className="error-banner">{err}</div>}
       {msg && <div style={{ color: "var(--teal)", marginBottom: 10 }}>{msg}</div>}
+      <p style={{ color: "var(--muted)", fontSize: 13, margin: "0 0 12px" }}>修改金額即為該方案的新定價（下期沿用）；已繳／已驗證的紀錄不受影響。</p>
       <Field label="期別"><input value={period} onChange={(e) => setPeriod(e.target.value)} placeholder="YYYY-MM" disabled={busy} /></Field>
       {plans.map((p) => (
         <Field key={p.id} label={`${p.name} 金額`}>
           <input type="number" value={amounts[p.id] ?? ""} onChange={(e) => setAmounts((s) => ({ ...s, [p.id]: e.target.value }))} disabled={busy} />
         </Field>
       ))}
-      <label style={{ display: "flex", gap: 8, alignItems: "center", margin: "8px 0 14px" }}>
-        <input type="checkbox" checked={updatePrices} onChange={(e) => setUpdatePrices(e.target.checked)} disabled={busy} /> 同時更新方案定價（下期沿用）
-      </label>
       <button className="btn btn--primary" onClick={run} disabled={busy}>發起並通知</button>
     </Modal>
   );
@@ -2493,7 +2468,7 @@ git commit -m "docs: redesign live — Discord-first payment flow, /發起繳費
 - Retention 引用計數 → Task 8.
 - `payments.declared_channel_tag_id` + 驗證帶入 → Task 1 (col), 15 (verify pre-fill), 17 (UI).
 - `settings.admin_discord_ids` 白名單授權 → Task 2 + Task 12 (`isAdmin`) + Task 17 (UI).
-- 發起繳費（Discord modal + 後台按鈕）+ 確認金額 + toggle → Tasks 7, 12, 17 (toggle in admin UI; Discord = always-on, **noted deviation**).
+- 發起繳費（Discord modal + 後台按鈕）+ 確認金額 → Tasks 7, 12, 17 (no toggle — any change is the new price, owner decision).
 - 發起更新方案現價 + 改 pending 金額 + 凍結 paid + 通知 + 去重 → Task 7.
 - cron 去重（手動發起後不重發）→ Task 7 claims the shared `billing_opened` slot (no cron change needed); verified in billing-initiate.test.
 - 對帳看板用 payments.amount，不受改價影響 → unchanged (reconcile.ts already sums `payments.amount`); 申報渠道顯示 → Task 17.

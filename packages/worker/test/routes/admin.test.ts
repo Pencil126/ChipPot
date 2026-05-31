@@ -152,6 +152,38 @@ describe("admin API", () => {
   });
 });
 
+describe("admin notifications", () => {
+  it("reports status, resends (force), and resets", async () => {
+    await call("PATCH", "/admin/workspace", { settings: { discord_billing_channel_id: "chan-1" } });
+    const u = await call("POST", "/admin/users", { display_name: "Notif", discord_id: "d-notif" });
+    const uid = ((await u!.json()) as any).id as number;
+    const s = await call("POST", "/admin/subscriptions", { user_id: uid, plan_id: 1, start_date: "2028-03-01" });
+    expect(s!.status).toBe(201);
+
+    let st = (await (await call("GET", "/admin/notifications?period=2028-03"))!.json()) as any;
+    expect(st.billing_opened).toBeNull();
+    expect(st.overdue).toBeNull();
+
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+    const r = await call("POST", "/admin/notifications/resend", { type: "overdue", period: "2028-03" });
+    vi.unstubAllGlobals();
+    expect(r!.status).toBe(200);
+    expect(((await r!.json()) as any).count).toBeGreaterThanOrEqual(1);
+    st = (await (await call("GET", "/admin/notifications?period=2028-03"))!.json()) as any;
+    expect(st.overdue?.sent_at).toBeTruthy();
+
+    const rs = await call("POST", "/admin/notifications/reset", { type: "overdue", period: "2028-03" });
+    expect(((await rs!.json()) as any).deleted).toBeGreaterThanOrEqual(1);
+    st = (await (await call("GET", "/admin/notifications?period=2028-03"))!.json()) as any;
+    expect(st.overdue).toBeNull();
+  });
+
+  it("validates type and period", async () => {
+    expect((await call("POST", "/admin/notifications/resend", { type: "bogus", period: "2028-03" }))!.status).toBe(400);
+    expect((await call("POST", "/admin/notifications/reset", { type: "overdue", period: "bad" }))!.status).toBe(400);
+  });
+});
+
 describe("admin billing/initiate + declared channel", () => {
   it("POST /admin/billing/initiate updates plan price + pending amounts", async () => {
     const pRes = await call("POST", "/admin/plans", { name: "InitPlan", provider: "openai", monthly_amount: 500 });

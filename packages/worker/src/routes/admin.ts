@@ -12,6 +12,7 @@ import { createChannelMessage, editChannelMessage } from "../adapters/discord/ap
 import { payButtonRow } from "../adapters/discord/commands";
 import { discordNotifier } from "../adapters/discord/notify";
 import { parseRosterCsv, importRoster } from "../core/import";
+import { sendOverdueForPeriod } from "../core/scheduled";
 
 // Single-workspace MVP: default to the seeded workspace, overridable via ?workspace_id=.
 const DEFAULT_WORKSPACE_ID = 1;
@@ -96,6 +97,49 @@ async function billingInitiate(req: Request, env: Env, ctx: RouteCtx): Promise<R
     env, ws, period, { amounts: b!.amounts }, actorOf(ctx), discordNotifier
   );
   return json({ ok: true, sent: r.sent, updated_plans: r.updatedPlans, updated_payments: r.updatedPayments });
+}
+
+const NOTIF_TYPES = ["billing_opened", "overdue"] as const;
+
+async function notificationsStatus(_req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
+  const ws = wsId(ctx);
+  const period = ctx.url.searchParams.get("period") ?? taipeiPeriod();
+  if (!PERIOD_RE.test(period)) return errorResponse(400, "period must be YYYY-MM");
+  const row = (type: string) =>
+    env.DB.prepare("SELECT sent_at FROM notification_logs WHERE workspace_id = ? AND type = ? AND period = ? ORDER BY sent_at DESC LIMIT 1")
+      .bind(ws, type, period).first<{ sent_at: string }>();
+  return json({ billing_opened: await row("billing_opened"), overdue: await row("overdue") });
+}
+
+async function notificationsResend(req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
+  const ws = wsId(ctx);
+  const b = await readJson<{ type?: string; period?: string }>(req);
+  const period = b?.period ?? taipeiPeriod();
+  if (!b?.type || !NOTIF_TYPES.includes(b.type as any)) return errorResponse(400, "type must be billing_opened or overdue");
+  if (!PERIOD_RE.test(period)) return errorResponse(400, "period must be YYYY-MM");
+  let result: { sent?: boolean; count?: number };
+  if (b.type === "billing_opened") {
+    const r = await initiateBillingOpened(env, ws, period, { amounts: [] }, actorOf(ctx), discordNotifier, { force: true });
+    result = { sent: r.sent };
+  } else {
+    const count = await sendOverdueForPeriod(env, ws, period, discordNotifier, { force: true });
+    result = { count };
+  }
+  await writeAudit(env.DB, { workspaceId: ws, actor: actorOf(ctx), action: "notification.resend", entityType: "workspace", entityId: ws, after: { type: b.type, period, ...result } });
+  return json({ ok: true, ...result });
+}
+
+async function notificationsReset(req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
+  const ws = wsId(ctx);
+  const b = await readJson<{ type?: string; period?: string }>(req);
+  const period = b?.period ?? taipeiPeriod();
+  if (!b?.type || !NOTIF_TYPES.includes(b.type as any)) return errorResponse(400, "type must be billing_opened or overdue");
+  if (!PERIOD_RE.test(period)) return errorResponse(400, "period must be YYYY-MM");
+  const res = await env.DB.prepare("DELETE FROM notification_logs WHERE workspace_id = ? AND type = ? AND period = ?")
+    .bind(ws, b.type, period).run();
+  const deleted = res.meta.changes ?? 0;
+  await writeAudit(env.DB, { workspaceId: ws, actor: actorOf(ctx), action: "notification.reset", entityType: "workspace", entityId: ws, after: { type: b.type, period, deleted } });
+  return json({ ok: true, deleted });
 }
 
 async function membersImport(req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
@@ -471,6 +515,9 @@ export function buildAdminRouter(): Router<Env> {
     .get("/admin/reconcile", reconcile)
     .post("/admin/billing/initiate", billingInitiate)
     .post("/admin/members/import", membersImport)
+    .get("/admin/notifications", notificationsStatus)
+    .post("/admin/notifications/resend", notificationsResend)
+    .post("/admin/notifications/reset", notificationsReset)
     .get("/admin/users", listUsers)
     .post("/admin/users", createUser)
     .patch("/admin/users/:id", updateUser)

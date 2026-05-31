@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, currentPeriod, type Payment, type ChannelTag } from "../api";
+import { api, currentPeriod, periodForBillingDay, type Payment, type ChannelTag } from "../api";
 import { useAsync, Card, Modal, Field, Empty, Money, StatusBadge } from "../ui";
 
 const STATUS_OPTS = [
@@ -11,10 +11,14 @@ const STATUS_OPTS = [
 ];
 
 export function Payments() {
-  const [period, setPeriod] = useState(currentPeriod());
+  const ws = useAsync(() => api.workspace(), []);
+  const billingDay = (ws.data as any)?.workspace?.billing_day ?? 1;
+  // null = "follow the billing-day-aware default"; "" = the admin cleared it (全部); a string = typed.
+  const [period, setPeriod] = useState<string | null>(null);
+  const effPeriod = period ?? periodForBillingDay(billingDay);
   const [status, setStatus] = useState("");
   const tags = useAsync(() => api.channelTags(), []);
-  const list = useAsync(() => api.payments({ period: period || undefined, status: status || undefined }), [period, status]);
+  const list = useAsync(() => api.payments({ period: effPeriod || undefined, status: status || undefined }), [effPeriod, status]);
   const [selected, setSelected] = useState<Payment | null>(null);
   const [showManual, setShowManual] = useState(false);
   const [showLink, setShowLink] = useState(false);
@@ -24,7 +28,7 @@ export function Payments() {
   return (
     <>
       <div className="toolbar">
-        <label>期別 <input value={period} onChange={(e) => setPeriod(e.target.value)} placeholder="全部" style={{ width: 100 }} /></label>
+        <label>期別 <input value={effPeriod} onChange={(e) => setPeriod(e.target.value)} placeholder="全部" style={{ width: 100 }} /></label>
         <div className="pills">
           {STATUS_OPTS.map((o) => (
             <button key={o.v} className={`pill ${status === o.v ? "pill--on" : ""}`} onClick={() => setStatus(o.v)}>{o.label}</button>

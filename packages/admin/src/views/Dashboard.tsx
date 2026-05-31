@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, currentPeriod } from "../api";
+import { api, periodForBillingDay } from "../api";
 import { useAsync, Card, Stat, Empty, Money } from "../ui";
 
 function PushStatus({ period }: { period: string }) {
@@ -38,15 +38,19 @@ function PushStatus({ period }: { period: string }) {
 }
 
 export function Dashboard() {
-  const [period, setPeriod] = useState(currentPeriod());
-  const { data, loading, error } = useAsync(() => api.reconcile(period), [period]);
+  const ws = useAsync(() => api.workspace(), []);
+  const billingDay = (ws.data as any)?.workspace?.billing_day ?? 1;
+  // null = "follow the billing-day-aware default"; a string = the admin typed a period.
+  const [period, setPeriod] = useState<string | null>(null);
+  const effPeriod = period ?? periodForBillingDay(billingDay);
+  const { data, loading, error } = useAsync(() => api.reconcile(effPeriod), [effPeriod]);
 
   return (
     <>
       <div className="toolbar">
         <label>
           期別{" "}
-          <input value={period} onChange={(e) => setPeriod(e.target.value)} placeholder="YYYY-MM" style={{ width: 110 }} />
+          <input value={effPeriod} onChange={(e) => setPeriod(e.target.value)} placeholder="YYYY-MM" style={{ width: 110 }} />
         </label>
       </div>
       {error && <div className="error-banner">{error}</div>}
@@ -87,7 +91,7 @@ export function Dashboard() {
             </div>
           </Card>
 
-          <PushStatus period={period} />
+          <PushStatus period={effPeriod} />
 
           <Card title="依渠道分組（已驗證）">
             <div className="tbl">

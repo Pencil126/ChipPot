@@ -82,7 +82,30 @@ export const api = {
   },
 };
 
+function taipeiYMD(now: Date): { y: number; m: number; d: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(now);
+  const get = (t: string) => Number(parts.find((p) => p.type === t)!.value);
+  return { y: get("year"), m: get("month"), d: get("day") };
+}
+
+/** Current calendar month (YYYY-MM) in Asia/Taipei. */
 export function currentPeriod(): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Taipei", year: "numeric", month: "2-digit" })
-    .format(new Date()).slice(0, 7);
+  const { y, m } = taipeiYMD(new Date());
+  return `${y}-${String(m).padStart(2, "0")}`;
+}
+
+/**
+ * The billing period the dashboard should default to, given the workspace billing day.
+ * A period's bills open on its billing day, so before that day we're still collecting the
+ * previous month — default to it; on/after the billing day, default to the current month.
+ * (With billing_day = 1 this is always the current calendar month.)
+ */
+export function periodForBillingDay(billingDay: number, now: Date = new Date()): string {
+  const { y, m, d } = taipeiYMD(now);
+  if (d >= billingDay) return `${y}-${String(m).padStart(2, "0")}`;
+  const pm = m === 1 ? 12 : m - 1;
+  const py = m === 1 ? y - 1 : y;
+  return `${py}-${String(pm).padStart(2, "0")}`;
 }

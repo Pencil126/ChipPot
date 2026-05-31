@@ -7,19 +7,18 @@ export interface PlanOpenLine {
   amount: number;
   role_id: string | null;
 }
-export interface OverdueTarget {
-  subscription_id: number;
-  period: string;
-  amount: number;
+export interface OverduePerson {
+  user_id: number;
   discord_id: string | null;
   user_name: string;
-  plan_name: string;
+  lines: { plan_name: string; amount: number }[];
+  total: number;
 }
 
 /** Channel-agnostic notification sink (Discord impl in adapters/discord/notify.ts). */
 export interface Notifier {
-  sendBillingOpened(env: Env, channelId: string, period: string, lines: PlanOpenLine[]): Promise<void>;
-  sendOverdue(env: Env, channelId: string, target: OverdueTarget): Promise<void>;
+  sendBillingOpened(env: Env, channelId: string, period: string, lines: PlanOpenLine[], template: string): Promise<void>;
+  sendOverdue(env: Env, channelId: string, period: string, people: OverduePerson[], template: string): Promise<void>;
 }
 
 export interface NotificationKey {

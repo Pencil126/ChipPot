@@ -11,6 +11,9 @@ export function Settings() {
   const [guild, setGuild] = useState("");
   const [channel, setChannel] = useState("");
   const [adminIds, setAdminIds] = useState("");
+  const [tplOverdue, setTplOverdue] = useState("");
+  const [tplBilling, setTplBilling] = useState("");
+  const [tplMessage, setTplMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -25,6 +28,9 @@ export function Settings() {
     setGuild(w.settings.discord_guild_id ?? "");
     setChannel(w.settings.discord_billing_channel_id ?? "");
     setAdminIds((w.settings.admin_discord_ids ?? []).join(", "));
+    setTplOverdue(w.settings.overdue_template ?? "");
+    setTplBilling(w.settings.billing_opened_template ?? "");
+    setTplMessage(w.settings.payment_message_template ?? "");
   }, [data]);
 
   async function save() {
@@ -39,6 +45,9 @@ export function Settings() {
           discord_guild_id: guild,
           discord_billing_channel_id: channel,
           admin_discord_ids: adminIds.split(",").map((s) => s.trim()).filter(Boolean),
+          overdue_template: tplOverdue,
+          billing_opened_template: tplBilling,
+          payment_message_template: tplMessage,
         },
       });
       setSaved(true);
@@ -60,6 +69,15 @@ export function Settings() {
         <Field label="Discord Guild ID"><input value={guild} onChange={(e) => setGuild(e.target.value)} disabled={busy} /></Field>
         <Field label="Discord 繳費頻道 ID"><input value={channel} onChange={(e) => setChannel(e.target.value)} disabled={busy} /></Field>
         <Field label="可發起繳費的管理員 Discord ID（逗號分隔）"><input value={adminIds} onChange={(e) => setAdminIds(e.target.value)} disabled={busy} /></Field>
+        <Field label="逾期催繳文字（{period} {count} {list}）">
+          <textarea value={tplOverdue} onChange={(e) => setTplOverdue(e.target.value)} disabled={busy} rows={4} style={{ width: "100%", fontFamily: "inherit" }} />
+        </Field>
+        <Field label="開繳通知文字（{period} {plans} {total}）">
+          <textarea value={tplBilling} onChange={(e) => setTplBilling(e.target.value)} disabled={busy} rows={4} style={{ width: "100%", fontFamily: "inherit" }} />
+        </Field>
+        <Field label="常駐繳費訊息文字（{period}）">
+          <textarea value={tplMessage} onChange={(e) => setTplMessage(e.target.value)} disabled={busy} rows={3} style={{ width: "100%", fontFamily: "inherit" }} />
+        </Field>
         <label style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16 }}>
           <input type="checkbox" checked={delMsg} onChange={(e) => setDelMsg(e.target.checked)} disabled={busy} /> 刪除 Discord 原始繳費訊息
         </label>

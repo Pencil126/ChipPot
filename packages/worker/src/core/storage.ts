@@ -347,6 +347,158 @@ export async function recordDeclaredWithToken(
   return { paymentId: row!.id };
 }
 
+// ── Settle a user's whole period at once (multi-subscription aggregation) ─────
+
+export interface SettleInput {
+  workspaceId: number;
+  userId: number;
+  period: string;
+  source: string; // "user_slash" (Discord) | "user_web" (web)
+  declaredChannelTagId?: number | null;
+  paymentNote?: string | null;
+  proof?: { body: R2Body; ext: string; contentType: string } | null;
+  tokenHash?: string | null; // web path only: atomically claim the one-time token
+}
+
+export interface SettleResult {
+  paidCount: number;
+  totalAmount: number;
+  alreadyPaidCount: number;
+  screenshotKey: string | null;
+  paymentIds: number[];
+}
+
+/** pending/rejected payments for this user's active subs in the period (the settle targets). */
+async function settleTargets(
+  env: Env, workspaceId: number, userId: number, period: string
+): Promise<{ id: number; amount: number }[]> {
+  const { results } = await env.DB
+    .prepare(
+      `SELECT p.id AS id, p.amount AS amount FROM payments p
+       JOIN subscriptions s ON s.id = p.subscription_id
+       WHERE p.workspace_id = ? AND p.period = ? AND p.status IN ('pending','rejected')
+         AND s.user_id = ? AND s.status = 'active'`
+    )
+    .bind(workspaceId, period, userId)
+    .all<{ id: number; amount: number }>();
+  return results;
+}
+
+async function alreadyPaidCount(
+  env: Env, workspaceId: number, userId: number, period: string
+): Promise<number> {
+  const row = await env.DB
+    .prepare(
+      `SELECT COUNT(*) AS c FROM payments p
+       JOIN subscriptions s ON s.id = p.subscription_id
+       WHERE p.workspace_id = ? AND p.period = ? AND p.status IN ('paid','verified')
+         AND s.user_id = ? AND s.status = 'active'`
+    )
+    .bind(workspaceId, period, userId)
+    .first<{ c: number }>();
+  return row?.c ?? 0;
+}
+
+/**
+ * Settle ALL of a user's active-subscription payments for a period in one operation.
+ * Discord paths (button/slash) take the direct path; the web path passes `tokenHash` to
+ * additionally claim the one-time token atomically (see the token branch). A single
+ * screenshot (if any) is stored once and its key shared across every settled row — the
+ * screenshot_key UNIQUE index was dropped in migration 0004 to allow this.
+ */
+export async function settleUserPeriod(env: Env, input: SettleInput): Promise<SettleResult> {
+  const { workspaceId, userId, period } = input;
+  const now = nowUtcIso();
+
+  // 1. Make sure every active sub has its period payment row (idempotent).
+  const subs = await env.DB
+    .prepare("SELECT id FROM subscriptions WHERE workspace_id = ? AND user_id = ? AND status = 'active'")
+    .bind(workspaceId, userId)
+    .all<{ id: number }>();
+  for (const s of subs.results) await ensurePeriodPayment(env.DB, s.id, period);
+
+  // 2. Which rows will this settle?
+  const targets = await settleTargets(env, workspaceId, userId, period);
+  if (targets.length === 0) {
+    // Nothing to settle. Token path treats this as an error (no eligible payment); the
+    // Discord path returns the already-paid count so the caller can message the user.
+    if (input.tokenHash) throw new NoEligiblePayment(0, period);
+    return {
+      paidCount: 0, totalAmount: 0,
+      alreadyPaidCount: await alreadyPaidCount(env, workspaceId, userId, period),
+      screenshotKey: null, paymentIds: [],
+    };
+  }
+
+  // 3. Store the proof once (shared key) if present.
+  let key: string | null = null;
+  if (input.proof) {
+    key = buildScreenshotKey(workspaceId, period, userId, input.proof.ext, crypto.randomUUID());
+    await putObject(env.BUCKET, key, input.proof.body, input.proof.contentType);
+  }
+
+  // 4. Apply. The web (token) path is a double-gated batch; the Discord path is a single
+  //    multi-row UPDATE.
+  try {
+    if (input.tokenHash) {
+      await applyTokenSettle(env, input, key, now);
+    } else {
+      await applyDirectSettle(env, input, key, now);
+    }
+  } catch (err) {
+    if (key) await deleteObject(env.BUCKET, key).catch(() => {});
+    throw err;
+  }
+
+  const paidRows = await env.DB
+    .prepare(
+      `SELECT p.id AS id, p.amount AS amount FROM payments p
+       JOIN subscriptions s ON s.id = p.subscription_id
+       WHERE p.workspace_id = ? AND p.period = ? AND p.status = 'paid' AND p.paid_at = ?
+         AND s.user_id = ? AND s.status = 'active'`
+    )
+    .bind(workspaceId, period, now, userId)
+    .all<{ id: number; amount: number }>();
+
+  return {
+    paidCount: paidRows.results.length,
+    totalAmount: paidRows.results.reduce((s, r) => s + r.amount, 0),
+    alreadyPaidCount: await alreadyPaidCount(env, workspaceId, userId, period),
+    screenshotKey: key,
+    paymentIds: paidRows.results.map((r) => r.id),
+  };
+}
+
+/** Discord direct path: a single multi-row UPDATE across the user's settleable rows. */
+async function applyDirectSettle(
+  env: Env, input: SettleInput, key: string | null, now: string
+): Promise<void> {
+  const { workspaceId, userId, period } = input;
+  await env.DB
+    .prepare(
+      `UPDATE payments
+         SET status = 'paid', has_proof = ?, screenshot_key = ?, declared_channel_tag_id = ?,
+             payment_note = COALESCE(?, payment_note), source = ?,
+             submitted_at = ?, paid_at = ?, updated_at = ?
+       WHERE workspace_id = ? AND period = ? AND status IN ('pending','rejected')
+         AND subscription_id IN (
+           SELECT id FROM subscriptions WHERE workspace_id = ? AND user_id = ? AND status = 'active')`
+    )
+    .bind(
+      key ? 1 : 0, key, input.declaredChannelTagId ?? null,
+      input.paymentNote ?? null, input.source, now, now, now,
+      workspaceId, period, workspaceId, userId
+    )
+    .run();
+}
+
+/** Web token path — implemented in Task 6. */
+async function applyTokenSettle(
+  _env: Env, _input: SettleInput, _key: string | null, _now: string
+): Promise<void> {
+  throw new Error("applyTokenSettle not implemented");
+}
+
 /** Decide which precise error to raise when the guarded batch didn't apply. */
 async function throwSubmitError(
   env: Env,

@@ -229,13 +229,12 @@ async function deferredInitiate(i: DiscordInteraction, env: Env): Promise<void> 
       const amounts: { plan_id: number; amount: number }[] = [];
       for (const row of i.data!.components ?? []) {
         for (const c of row.components) {
-          if (c.custom_id.startsWith("amt:")) {
-            const plan_id = Number(c.custom_id.slice(4));
-            const amount = Number(String(c.value).trim());
-            if (Number.isInteger(plan_id) && Number.isInteger(amount) && amount >= 0) {
-              amounts.push({ plan_id, amount });
-            }
-          }
+          if (!c.custom_id.startsWith("amt:")) continue;
+          const raw = String(c.value).trim();
+          // Only plain non-negative integers; blank / "1e3" / decimals are skipped (no change).
+          if (!/^\d+$/.test(raw)) continue;
+          const plan_id = Number(c.custom_id.slice(4));
+          if (Number.isInteger(plan_id)) amounts.push({ plan_id, amount: Number(raw) });
         }
       }
       const r = await initiateBillingOpened(env, ws, period, { amounts }, `discord:${discordUserId(i)}`, discordNotifier);
@@ -289,15 +288,28 @@ async function handlePayButton(i: DiscordInteraction, env: Env): Promise<Respons
   });
 }
 
+const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
 async function handlePaySelect(i: DiscordInteraction, env: Env): Promise<Response> {
   const m = await resolveMember(i, env);
   if (m instanceof Response) return m;
   const { ws, userId } = m;
 
-  const parts = (i.data?.custom_id ?? "").split(":"); // chippot:paysel:<ws>:<period>
-  const period = parts[3] ?? taipeiPeriod();
+  const updateErr = (content: string) =>
+    json({ type: RT_UPDATE_MESSAGE, data: { content, components: [] } });
+
+  // Strictly parse chippot:paysel:<ws>:<period>; the ws must match the resolved workspace.
+  const parts = (i.data?.custom_id ?? "").split(":");
+  const period = parts[3] ?? "";
+  if (!PERIOD_RE.test(period) || Number(parts[2]) !== ws) {
+    return updateErr("這個繳費選單已失效，請重新點「繳費」按鈕。");
+  }
+  // The selected tag must be one of this workspace's active channel tags.
   const tagId = Number(i.data?.values?.[0]);
-  if (!Number.isInteger(tagId)) return ephemeral("渠道無效，請重試。");
+  const tags = await listActiveChannelTags(env.DB, ws);
+  if (!Number.isInteger(tagId) || !tags.some((t) => t.id === tagId)) {
+    return updateErr("渠道無效，請重新點「繳費」按鈕再選一次。");
+  }
 
   try {
     const r = await settleUserPeriod(env, {

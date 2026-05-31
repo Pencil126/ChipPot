@@ -60,6 +60,28 @@ describe("button → channel select → settle", () => {
     expect(rows.results.every((p) => p.declared_channel_tag_id === TAG)).toBe(true);
   });
 
+  it("select submit with a foreign/invalid tag is rejected (type 7, no settle)", async () => {
+    const i: DiscordInteraction = {
+      type: 3, id: "1", token: "t", guild_id: GUILD, ...member(DISC),
+      data: { custom_id: `chippot:paysel:${WS}:${PERIOD}`, component_type: 3, values: ["999999"] },
+    };
+    const res = await routeInteraction(i, env, CTX);
+    const body = (await res.json()) as any;
+    expect(body.type).toBe(7);
+    expect(body.data.content).toContain("渠道無效");
+  });
+
+  it("select submit with a malformed period custom_id is rejected (type 7)", async () => {
+    const i: DiscordInteraction = {
+      type: 3, id: "1", token: "t", guild_id: GUILD, ...member(DISC),
+      data: { custom_id: `chippot:paysel:${WS}:BADPERIOD`, component_type: 3, values: [String(TAG)] },
+    };
+    const res = await routeInteraction(i, env, CTX);
+    const body = (await res.json()) as any;
+    expect(body.type).toBe(7);
+    expect(body.data.content).toContain("失效");
+  });
+
   it("button after paying says already registered", async () => {
     const i: DiscordInteraction = {
       type: 3, id: "1", token: "t", guild_id: GUILD, ...member(DISC),

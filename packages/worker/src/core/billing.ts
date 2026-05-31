@@ -1,4 +1,8 @@
+import type { Env } from "../env";
+import { parseSettings } from "../env";
 import { nowUtcIso, periodStart, periodEnd, dueDate } from "./time";
+import { writeAudit } from "./audit";
+import { claimNotification, type Notifier, type PlanOpenLine } from "./notify";
 
 export interface PeriodDates {
   period_start: string;
@@ -94,4 +98,111 @@ export async function ensureFirstPayment(
   if (!sub) throw new Error(`subscription ${subscriptionId} not found`);
   const period = sub.start_date.slice(0, 7);
   return ensurePeriodPayment(db, subscriptionId, period);
+}
+
+// ── Manual "發起繳費" (confirm amounts + open billing) ─────────────────────────
+
+export interface PlanAmount {
+  plan_id: number;
+  amount: number;
+}
+
+export interface InitiateInput {
+  amounts: PlanAmount[];
+}
+
+export interface InitiateResult {
+  sent: boolean;
+  updatedPlans: number;
+  updatedPayments: number;
+}
+
+/**
+ * Manually "發起繳費" for a period: write the confirmed amounts back as the plans' new prices
+ * (any change is always the new price — owner decision, no temporary-month mode), rewrite this
+ * period's still-PENDING payment amounts (paid/verified are frozen), then post the
+ * billing-opened notice — claiming the same dedup slot the cron uses, so a manual trigger and
+ * the cron can never both notify.
+ */
+export async function initiateBillingOpened(
+  env: Env,
+  workspaceId: number,
+  period: string,
+  input: InitiateInput,
+  actor: string,
+  notifier: Notifier
+): Promise<InitiateResult> {
+  const now = nowUtcIso();
+  const plans = await env.DB
+    .prepare("SELECT id, name, monthly_amount, discord_role_id, active FROM plans WHERE workspace_id = ?")
+    .bind(workspaceId)
+    .all<{ id: number; name: string; monthly_amount: number; discord_role_id: string | null; active: number }>();
+  const planById = new Map(plans.results.map((p) => [p.id, p]));
+  const amountByPlan = new Map<number, number>();
+
+  let updatedPlans = 0;
+  let updatedPayments = 0;
+
+  for (const a of input.amounts) {
+    const plan = planById.get(a.plan_id);
+    if (!plan) continue; // ignore amounts for plans outside this workspace
+    if (!Number.isInteger(a.amount) || a.amount < 0) continue;
+    amountByPlan.set(a.plan_id, a.amount);
+
+    if (a.amount !== plan.monthly_amount) {
+      await env.DB.prepare("UPDATE plans SET monthly_amount = ?, updated_at = ? WHERE id = ?")
+        .bind(a.amount, now, a.plan_id).run();
+      await writeAudit(env.DB, {
+        workspaceId, actor, action: "amount.override", entityType: "plan", entityId: a.plan_id,
+        before: { monthly_amount: plan.monthly_amount }, after: { monthly_amount: a.amount },
+      });
+      updatedPlans++;
+    }
+  }
+
+  // Ensure this period's payments exist for every active sub, then rewrite PENDING amounts.
+  const subs = await env.DB
+    .prepare("SELECT id, plan_id FROM subscriptions WHERE workspace_id = ? AND status = 'active'")
+    .bind(workspaceId)
+    .all<{ id: number; plan_id: number }>();
+  for (const s of subs.results) await ensurePeriodPayment(env.DB, s.id, period);
+  for (const [planId, amount] of amountByPlan) {
+    const res = await env.DB
+      .prepare(
+        `UPDATE payments SET amount = ?, updated_at = ?
+         WHERE workspace_id = ? AND period = ? AND status = 'pending'
+           AND subscription_id IN (SELECT id FROM subscriptions WHERE workspace_id = ? AND plan_id = ? AND status = 'active')`
+      )
+      .bind(amount, now, workspaceId, period, workspaceId, planId)
+      .run();
+    updatedPayments += res.meta.changes ?? 0;
+  }
+
+  // Notify (claim the shared billing_opened slot — cron uses the same key).
+  const ws = await env.DB.prepare("SELECT settings FROM workspaces WHERE id = ?").bind(workspaceId).first<{ settings: string }>();
+  const channelId = parseSettings(ws!.settings).discord_billing_channel_id;
+  let sent = false;
+  if (channelId && env.DISCORD_BOT_TOKEN) {
+    if (await claimNotification(env.DB, { workspaceId, type: "billing_opened", period })) {
+      const lines: PlanOpenLine[] = subs.results
+        .map((s) => planById.get(s.plan_id))
+        .filter((p): p is NonNullable<typeof p> => !!p && p.active === 1)
+        .filter((p, i, arr) => arr.findIndex((q) => q.id === p.id) === i) // dedupe plans
+        .map((p) => ({
+          plan_id: p.id, plan_name: p.name, role_id: p.discord_role_id,
+          amount: amountByPlan.get(p.id) ?? p.monthly_amount,
+        }));
+      if (lines.length > 0) {
+        await notifier.sendBillingOpened(env, channelId, period, lines);
+        sent = true;
+      }
+    }
+  }
+
+  await writeAudit(env.DB, {
+    workspaceId, actor, action: "billing.initiate", entityType: "workspace", entityId: workspaceId,
+    after: { period, updatedPlans, updatedPayments, sent },
+  });
+
+  return { sent, updatedPlans, updatedPayments };
 }

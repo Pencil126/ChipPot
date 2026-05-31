@@ -42,6 +42,10 @@ const commands = [
     description: "（管理員）確認本期各方案金額並發出開繳通知",
     default_member_permissions: "32",
   },
+  {
+    name: "綁定", type: 1,
+    description: "把你的 Discord 帳號綁定到名單上的成員",
+  },
 ];
 
 const res = await fetch(`https://discord.com/api/v10/applications/${APP_ID}/guilds/${GUILD_ID}/commands`, {

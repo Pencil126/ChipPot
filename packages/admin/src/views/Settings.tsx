@@ -2,6 +2,45 @@ import { useEffect, useState } from "react";
 import { api, currentPeriod } from "../api";
 import { useAsync, Card, Field, Empty, Modal } from "../ui";
 
+const PLACEHOLDER_RE = /\{(\w+)\}/g;
+const OVERDUE_KEYS = ["period", "count", "list"];
+const BILLING_KEYS = ["period", "plans", "total"];
+const MSG_KEYS = ["period"];
+
+function renderTpl(tpl: string, vars: Record<string, string>): string {
+  return tpl.replace(PLACEHOLDER_RE, (whole, key) => (key in vars ? vars[key]! : whole));
+}
+function unknownKeys(tpl: string, allowed: string[]): string[] {
+  return [...tpl.matchAll(PLACEHOLDER_RE)].map((m) => m[1]!).filter((k) => !allowed.includes(k));
+}
+function sampleVars(): { overdue: Record<string, string>; billing: Record<string, string>; message: Record<string, string> } {
+  const period = currentPeriod();
+  return {
+    overdue: { period, count: "2", list: "・@小明 ChatGPT NT$315、Claude Premium NT$1,258（合計 NT$1,573）\n・@小華 Claude Standard NT$251（合計 NT$251）" },
+    billing: { period, plans: "@ChatGPT　ChatGPT：NT$315\n@Claude Premium　Claude Premium：NT$1,258", total: "1,573" },
+    message: { period },
+  };
+}
+
+function TemplateField({ label, value, onChange, allowed, sample, disabled, rows }: {
+  label: string; value: string; onChange: (v: string) => void; allowed: string[];
+  sample: Record<string, string>; disabled: boolean; rows: number;
+}) {
+  const unknown = unknownKeys(value, allowed);
+  return (
+    <Field label={label}>
+      <textarea value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} rows={rows} style={{ width: "100%", fontFamily: "inherit" }} />
+      {unknown.length > 0 && (
+        <div className="error-banner" style={{ marginTop: 6 }}>未知的佔位符：{unknown.map((k) => `{${k}}`).join(", ")}（請修正後才能儲存）</div>
+      )}
+      <div style={{ marginTop: 6, padding: "8px 10px", border: "1px solid var(--line)", borderRadius: 6, whiteSpace: "pre-wrap", fontSize: 13, color: "var(--muted)" }}>
+        <div className="field__label" style={{ marginBottom: 4 }}>預覽</div>
+        {renderTpl(value, sample)}
+      </div>
+    </Field>
+  );
+}
+
 export function Settings() {
   const { data, loading, error } = useAsync(() => api.workspace(), []);
   const [billingDay, setBillingDay] = useState("5");
@@ -58,6 +97,12 @@ export function Settings() {
   if (loading) return <Empty>載入中…</Empty>;
   if (error) return <div className="error-banner">{error}</div>;
 
+  const samples = sampleVars();
+  const tplInvalid =
+    unknownKeys(tplOverdue, OVERDUE_KEYS).length > 0 ||
+    unknownKeys(tplBilling, BILLING_KEYS).length > 0 ||
+    unknownKeys(tplMessage, MSG_KEYS).length > 0;
+
   return (
     <Card title="設定">
       <div style={{ padding: "18px 20px", maxWidth: 460 }}>
@@ -69,19 +114,14 @@ export function Settings() {
         <Field label="Discord Guild ID"><input value={guild} onChange={(e) => setGuild(e.target.value)} disabled={busy} /></Field>
         <Field label="Discord 繳費頻道 ID"><input value={channel} onChange={(e) => setChannel(e.target.value)} disabled={busy} /></Field>
         <Field label="可發起繳費的管理員 Discord ID（逗號分隔）"><input value={adminIds} onChange={(e) => setAdminIds(e.target.value)} disabled={busy} /></Field>
-        <Field label="逾期催繳文字（{period} {count} {list}）">
-          <textarea value={tplOverdue} onChange={(e) => setTplOverdue(e.target.value)} disabled={busy} rows={4} style={{ width: "100%", fontFamily: "inherit" }} />
-        </Field>
-        <Field label="開繳通知文字（{period} {plans} {total}）">
-          <textarea value={tplBilling} onChange={(e) => setTplBilling(e.target.value)} disabled={busy} rows={4} style={{ width: "100%", fontFamily: "inherit" }} />
-        </Field>
-        <Field label="常駐繳費訊息文字（{period}）">
-          <textarea value={tplMessage} onChange={(e) => setTplMessage(e.target.value)} disabled={busy} rows={3} style={{ width: "100%", fontFamily: "inherit" }} />
-        </Field>
+        <TemplateField label="逾期催繳文字（{period} {count} {list}）" value={tplOverdue} onChange={setTplOverdue} allowed={OVERDUE_KEYS} sample={samples.overdue} disabled={busy} rows={4} />
+        <TemplateField label="開繳通知文字（{period} {plans} {total}）" value={tplBilling} onChange={setTplBilling} allowed={BILLING_KEYS} sample={samples.billing} disabled={busy} rows={4} />
+        <TemplateField label="常駐繳費訊息文字（{period}）" value={tplMessage} onChange={setTplMessage} allowed={MSG_KEYS} sample={samples.message} disabled={busy} rows={3} />
         <label style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16 }}>
           <input type="checkbox" checked={delMsg} onChange={(e) => setDelMsg(e.target.checked)} disabled={busy} /> 刪除 Discord 原始繳費訊息
         </label>
-        <button className="btn btn--primary" onClick={save} disabled={busy}>儲存設定</button>
+        {tplInvalid && <div className="error-banner" style={{ marginBottom: 10 }}>有未知的佔位符，請修正後再儲存。</div>}
+        <button className="btn btn--primary" onClick={save} disabled={busy || tplInvalid}>儲存設定</button>
 
         <hr style={{ border: 0, borderTop: "1px solid var(--line)", margin: "22px 0 18px" }} />
         <div className="field__label">常駐繳費訊息</div>

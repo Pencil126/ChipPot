@@ -1,6 +1,28 @@
 import { env } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
-import { getWorkspace, getActivePlans } from "../../src/core/db";
+import { beforeAll, describe, expect, it } from "vitest";
+import {
+  getWorkspace, getActivePlans, listActiveChannelTags, listSettleablePayments,
+} from "../../src/core/db";
+
+const TS = "2026-05-01T00:00:00.000Z";
+const WS = 9020;
+const SUB_A = 9020, SUB_B = 90201;
+const PLAN_B = 90201;
+
+beforeAll(async () => {
+  await env.DB.batch([
+    env.DB.prepare(`INSERT INTO workspaces (id,name,owner_id,channel_type,billing_day,settings,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`).bind(WS, "W", "o", "discord", 5, "{}", TS, TS),
+    env.DB.prepare(`INSERT INTO users (id,workspace_id,display_name,created_at,updated_at) VALUES (?,?,?,?,?)`).bind(WS, WS, "U", TS, TS),
+    env.DB.prepare(`INSERT INTO plans (id,workspace_id,name,provider,monthly_amount,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`).bind(WS, WS, "ChatGPT", "openai", 315, TS, TS),
+    env.DB.prepare(`INSERT INTO plans (id,workspace_id,name,provider,monthly_amount,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`).bind(PLAN_B, WS, "Claude", "anthropic", 251, TS, TS),
+    env.DB.prepare(`INSERT INTO subscriptions (id,workspace_id,user_id,plan_id,start_date,billing_day,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`).bind(SUB_A, WS, WS, WS, "2027-01-01", 5, TS, TS),
+    env.DB.prepare(`INSERT INTO subscriptions (id,workspace_id,user_id,plan_id,start_date,billing_day,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`).bind(SUB_B, WS, WS, PLAN_B, "2027-01-01", 5, TS, TS),
+    env.DB.prepare(`INSERT INTO channel_tags (id,workspace_id,name,type,active,sort_order,created_at) VALUES (?,?,?,?,?,?,?)`).bind(WS, WS, "LINE Pay", "linepay", 1, 1, TS),
+    env.DB.prepare(`INSERT INTO channel_tags (id,workspace_id,name,type,active,sort_order,created_at) VALUES (?,?,?,?,?,?,?)`).bind(90201, WS, "停用", "other", 0, 2, TS),
+    env.DB.prepare(`INSERT INTO payments (workspace_id,subscription_id,period,period_start,period_end,due_date,amount,status,source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).bind(WS, SUB_A, "2027-01", "2027-01-01", "2027-01-31", "2027-01-05", 315, "pending", "cron", TS, TS),
+    env.DB.prepare(`INSERT INTO payments (workspace_id,subscription_id,period,period_start,period_end,due_date,amount,status,source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).bind(WS, SUB_B, "2027-01", "2027-01-01", "2027-01-31", "2027-01-05", 251, "pending", "cron", TS, TS),
+  ]);
+});
 
 describe("db getters", () => {
   it("getWorkspace returns the seeded workspace", async () => {
@@ -18,5 +40,19 @@ describe("db getters", () => {
     expect(plans.map((p) => p.name)).toEqual([
       "ChatGPT", "Claude Standard", "Claude Premium",
     ]);
+  });
+});
+
+describe("channel tags + settleable payments", () => {
+  it("listActiveChannelTags returns only active tags, sorted", async () => {
+    const tags = await listActiveChannelTags(env.DB, WS);
+    expect(tags.map((t) => t.name)).toEqual(["LINE Pay"]);
+  });
+
+  it("listSettleablePayments returns pending/rejected payments for the user's active subs", async () => {
+    const rows = await listSettleablePayments(env.DB, WS, WS, "2027-01");
+    expect(rows.length).toBe(2);
+    expect(rows.reduce((s, r) => s + r.amount, 0)).toBe(566);
+    expect(rows[0]).toHaveProperty("plan_name");
   });
 });

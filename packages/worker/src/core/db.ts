@@ -102,3 +102,53 @@ export async function listActiveSubscriptions(
     .all<SubscriptionChoice>();
   return results;
 }
+
+export interface ChannelTagChoice {
+  id: number;
+  name: string;
+}
+
+/** Active channel tags for a workspace (payment channel picker), sorted for display. */
+export async function listActiveChannelTags(
+  db: D1Database,
+  workspaceId: number
+): Promise<ChannelTagChoice[]> {
+  const { results } = await db
+    .prepare(
+      "SELECT id, name FROM channel_tags WHERE workspace_id = ? AND active = 1 ORDER BY sort_order, id"
+    )
+    .bind(workspaceId)
+    .all<ChannelTagChoice>();
+  return results;
+}
+
+export interface SettleablePayment {
+  id: number;
+  amount: number;
+  plan_name: string;
+}
+
+/**
+ * Payments that a single submit can still settle (pending/rejected) for a user's active
+ * subscriptions in a period. Used to show the per-plan breakdown + total before settling.
+ */
+export async function listSettleablePayments(
+  db: D1Database,
+  workspaceId: number,
+  userId: number,
+  period: string
+): Promise<SettleablePayment[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT p.id AS id, p.amount AS amount, pl.name AS plan_name
+       FROM payments p
+       JOIN subscriptions s ON s.id = p.subscription_id
+       JOIN plans pl ON pl.id = s.plan_id
+       WHERE p.workspace_id = ? AND p.period = ? AND p.status IN ('pending','rejected')
+         AND s.user_id = ? AND s.status = 'active'
+       ORDER BY p.id`
+    )
+    .bind(workspaceId, period, userId)
+    .all<SettleablePayment>();
+  return results;
+}

@@ -30,38 +30,40 @@ export function Payments() {
             <button key={o.v} className={`pill ${status === o.v ? "pill--on" : ""}`} onClick={() => setStatus(o.v)}>{o.label}</button>
           ))}
         </div>
-        <div style={{ flex: 1 }} />
+        <div className="grow" style={{ flex: 1 }} />
         <button className="btn" onClick={() => setShowLink(true)}>產生上傳連結</button>
         <button className="btn btn--primary" onClick={() => setShowManual(true)}>手動補登</button>
       </div>
 
       {list.error && <div className="error-banner">{list.error}</div>}
       <Card title="繳費紀錄">
-        <table>
-          <thead><tr><th>成員</th><th>方案</th><th>期別</th><th className="right">金額</th><th>狀態</th><th>憑證</th><th>來源</th><th></th></tr></thead>
-          <tbody>
-            {list.loading && <tr><td colSpan={8}><Empty>載入中…</Empty></td></tr>}
-            {list.data?.payments.length === 0 && <tr><td colSpan={8}><Empty>沒有符合的紀錄</Empty></td></tr>}
-            {list.data?.payments.map((p) => (
-              <tr key={p.id} className="click" onClick={() => setSelected(p)}>
-                <td>{p.user_name}</td>
-                <td>{p.plan_name}</td>
-                <td className="mono">{p.period}</td>
-                <td className="right"><Money v={p.amount} /></td>
-                <td><StatusBadge status={p.status} /></td>
-                <td>{
-                  ["paid", "verified"].includes(p.status)
-                    ? (p.has_proof ? <span className="proof-yes">✅ 有截圖</span> : <span className="proof-no">⚠️ 純聲明</span>)
-                    : <span style={{ color: "var(--muted)" }}>—</span>
-                }</td>
-                <td style={{ fontSize: 12.5, color: "var(--muted)" }}>{p.source}</td>
-                <td className="right" onClick={(e) => e.stopPropagation()}>
-                  {p.status === "paid" && <QuickVerify id={p.id} onDone={reload} />}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="tbl">
+          <table>
+            <thead><tr><th>成員</th><th>方案</th><th>期別</th><th className="right">金額</th><th>狀態</th><th>憑證</th><th>來源</th><th></th></tr></thead>
+            <tbody>
+              {list.loading && <tr><td colSpan={8}><Empty>載入中…</Empty></td></tr>}
+              {list.data?.payments.length === 0 && <tr><td colSpan={8}><Empty>沒有符合的紀錄</Empty></td></tr>}
+              {list.data?.payments.map((p) => (
+                <tr key={p.id} className="click" onClick={() => setSelected(p)}>
+                  <td>{p.user_name}</td>
+                  <td>{p.plan_name}</td>
+                  <td className="mono">{p.period}</td>
+                  <td className="right"><Money v={p.amount} /></td>
+                  <td><StatusBadge status={p.status} /></td>
+                  <td>{
+                    ["paid", "verified"].includes(p.status)
+                      ? (p.has_proof ? <span className="proof-yes">✅ 有截圖</span> : <span className="proof-no">⚠️ 純聲明</span>)
+                      : <span style={{ color: "var(--muted)" }}>—</span>
+                  }</td>
+                  <td style={{ fontSize: 12.5, color: "var(--muted)" }}>{p.source}</td>
+                  <td className="right" onClick={(e) => e.stopPropagation()}>
+                    {p.status === "paid" && <QuickVerify id={p.id} onDone={reload} />}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </Card>
 
       {selected && (

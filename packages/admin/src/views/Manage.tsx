@@ -15,18 +15,20 @@ export function Users() {
     <>
       {error && <div className="error-banner">{error}</div>}
       <Card title="成員" action={<button className="btn btn--primary" onClick={() => setEdit(null)}>新增成員</button>}>
-        <table>
-          <thead><tr><th>名稱</th><th>Discord ID</th><th>Email</th><th></th></tr></thead>
-          <tbody>
-            {loading && <tr><td colSpan={4}><Empty>載入中…</Empty></td></tr>}
-            {data?.users.map((u) => (
-              <tr key={u.id}>
-                <td>{u.display_name}</td><td className="mono" style={{ fontSize: 12.5 }}>{u.discord_id ?? "—"}</td><td>{u.email ?? "—"}</td>
-                <td className="right"><button className="btn" onClick={() => setEdit(u)}>編輯</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="tbl">
+          <table>
+            <thead><tr><th>名稱</th><th>Discord ID</th><th>Email</th><th></th></tr></thead>
+            <tbody>
+              {loading && <tr><td colSpan={4}><Empty>載入中…</Empty></td></tr>}
+              {data?.users.map((u) => (
+                <tr key={u.id}>
+                  <td>{u.display_name}</td><td className="mono" style={{ fontSize: 12.5 }}>{u.discord_id ?? "—"}</td><td>{u.email ?? "—"}</td>
+                  <td className="right"><button className="btn" onClick={() => setEdit(u)}>編輯</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </Card>
       {edit !== undefined && <UserModal user={edit} onClose={() => setEdit(undefined)} onDone={() => { setEdit(undefined); reload(); }} />}
     </>
@@ -65,18 +67,20 @@ export function Subscriptions() {
     <>
       {error && <div className="error-banner">{error}</div>}
       <Card title="訂閱" action={<button className="btn btn--primary" onClick={() => setAdd(true)}>新增訂閱</button>}>
-        <table>
-          <thead><tr><th>成員</th><th>方案</th><th>狀態</th><th>起算日</th><th className="right">結帳日</th><th></th></tr></thead>
-          <tbody>
-            {loading && <tr><td colSpan={6}><Empty>載入中…</Empty></td></tr>}
-            {data?.subscriptions.map((s) => (
-              <tr key={s.id}>
-                <td>{s.user_name}</td><td>{s.plan_name}</td><td>{s.status}</td><td className="mono">{s.start_date}</td><td className="right mono">{s.billing_day}</td>
-                <td className="right"><button className="btn" onClick={() => setEdit(s)}>編輯</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="tbl">
+          <table>
+            <thead><tr><th>成員</th><th>方案</th><th>狀態</th><th>起算日</th><th className="right">結帳日</th><th></th></tr></thead>
+            <tbody>
+              {loading && <tr><td colSpan={6}><Empty>載入中…</Empty></td></tr>}
+              {data?.subscriptions.map((s) => (
+                <tr key={s.id}>
+                  <td>{s.user_name}</td><td>{s.plan_name}</td><td>{s.status}</td><td className="mono">{s.start_date}</td><td className="right mono">{s.billing_day}</td>
+                  <td className="right"><button className="btn" onClick={() => setEdit(s)}>編輯</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </Card>
       {add && <SubAddModal onClose={() => setAdd(false)} onDone={() => { setAdd(false); reload(); }} />}
       {edit && <SubEditModal sub={edit} onClose={() => setEdit(null)} onDone={() => { setEdit(null); reload(); }} />}
@@ -134,19 +138,21 @@ export function Plans() {
     <>
       {error && <div className="error-banner">{error}</div>}
       <Card title="方案" action={<button className="btn btn--primary" onClick={() => setEdit(null)}>新增方案</button>}>
-        <table>
-          <thead><tr><th>名稱</th><th>provider</th><th className="right">月費</th><th>身分組 ID</th><th>啟用</th><th></th></tr></thead>
-          <tbody>
-            {loading && <tr><td colSpan={6}><Empty>載入中…</Empty></td></tr>}
-            {data?.plans.map((p) => (
-              <tr key={p.id}>
-                <td>{p.name}</td><td>{p.provider}</td><td className="right mono">NT${p.monthly_amount}</td>
-                <td className="mono" style={{ fontSize: 12 }}>{p.discord_role_id ?? "—"}</td><td>{p.active ? "✓" : "—"}</td>
-                <td className="right"><button className="btn" onClick={() => setEdit(p)}>編輯</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="tbl">
+          <table>
+            <thead><tr><th>名稱</th><th>provider</th><th className="right">月費</th><th>身分組 ID</th><th>啟用</th><th></th></tr></thead>
+            <tbody>
+              {loading && <tr><td colSpan={6}><Empty>載入中…</Empty></td></tr>}
+              {data?.plans.map((p) => (
+                <tr key={p.id}>
+                  <td>{p.name}</td><td>{p.provider}</td><td className="right mono">NT${p.monthly_amount}</td>
+                  <td className="mono" style={{ fontSize: 12 }}>{p.discord_role_id ?? "—"}</td><td>{p.active ? "✓" : "—"}</td>
+                  <td className="right"><button className="btn" onClick={() => setEdit(p)}>編輯</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </Card>
       {edit !== undefined && <PlanModal plan={edit} onClose={() => setEdit(undefined)} onDone={() => { setEdit(undefined); reload(); }} />}
     </>
@@ -185,18 +191,20 @@ export function ChannelTags() {
     <>
       {error && <div className="error-banner">{error}</div>}
       <Card title="渠道 Tag（對帳分組）" action={<button className="btn btn--primary" onClick={() => setEdit(null)}>新增 Tag</button>}>
-        <table>
-          <thead><tr><th>名稱</th><th>類型</th><th className="right">排序</th><th>啟用</th><th></th></tr></thead>
-          <tbody>
-            {loading && <tr><td colSpan={5}><Empty>載入中…</Empty></td></tr>}
-            {data?.channel_tags.map((t) => (
-              <tr key={t.id}>
-                <td>{t.name}</td><td>{t.type ?? "—"}</td><td className="right mono">{t.sort_order}</td><td>{t.active ? "✓" : "—"}</td>
-                <td className="right"><button className="btn" onClick={() => setEdit(t)}>編輯</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="tbl">
+          <table>
+            <thead><tr><th>名稱</th><th>類型</th><th className="right">排序</th><th>啟用</th><th></th></tr></thead>
+            <tbody>
+              {loading && <tr><td colSpan={5}><Empty>載入中…</Empty></td></tr>}
+              {data?.channel_tags.map((t) => (
+                <tr key={t.id}>
+                  <td>{t.name}</td><td>{t.type ?? "—"}</td><td className="right mono">{t.sort_order}</td><td>{t.active ? "✓" : "—"}</td>
+                  <td className="right"><button className="btn" onClick={() => setEdit(t)}>編輯</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </Card>
       {edit !== undefined && <TagModal tag={edit} onClose={() => setEdit(undefined)} onDone={() => { setEdit(undefined); reload(); }} />}
     </>

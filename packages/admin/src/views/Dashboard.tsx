@@ -24,13 +24,15 @@ function PushStatus({ period }: { period: string }) {
   return (
     <Card title="推播狀態">
       {msg && <div style={{ color: "var(--teal)", padding: "8px 20px" }}>{msg}</div>}
-      <table>
-        <thead><tr><th>通知</th><th>狀態</th><th></th></tr></thead>
-        <tbody>
-          <Row label="開繳通知" type="billing_opened" sentAt={data?.billing_opened?.sent_at} />
-          <Row label="逾期催繳" type="overdue" sentAt={data?.overdue?.sent_at} />
-        </tbody>
-      </table>
+      <div className="tbl">
+        <table>
+          <thead><tr><th>通知</th><th>狀態</th><th></th></tr></thead>
+          <tbody>
+            <Row label="開繳通知" type="billing_opened" sentAt={data?.billing_opened?.sent_at} />
+            <Row label="逾期催繳" type="overdue" sentAt={data?.overdue?.sent_at} />
+          </tbody>
+        </table>
+      </div>
     </Card>
   );
 }
@@ -62,43 +64,47 @@ export function Dashboard() {
           </div>
 
           <Card title="各方案">
-            <table>
-              <thead>
-                <tr><th>方案</th><th className="right">筆數</th><th className="right">待繳</th><th className="right">已繳</th><th className="right">已驗證</th><th className="right">應收</th><th className="right">已驗證金額</th></tr>
-              </thead>
-              <tbody>
-                {data.by_plan.length === 0 && <tr><td colSpan={7}><Empty>本期尚無資料</Empty></td></tr>}
-                {data.by_plan.map((p) => (
-                  <tr key={p.plan_id}>
-                    <td>{p.plan_name}</td>
-                    <td className="right mono">{p.total}</td>
-                    <td className="right mono">{p.pending}</td>
-                    <td className="right mono">{p.paid}</td>
-                    <td className="right mono">{p.verified}</td>
-                    <td className="right"><Money v={p.amount_due} /></td>
-                    <td className="right"><Money v={p.amount_verified} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="tbl">
+              <table>
+                <thead>
+                  <tr><th>方案</th><th className="right">筆數</th><th className="right">待繳</th><th className="right">已繳</th><th className="right">已驗證</th><th className="right">應收</th><th className="right">已驗證金額</th></tr>
+                </thead>
+                <tbody>
+                  {data.by_plan.length === 0 && <tr><td colSpan={7}><Empty>本期尚無資料</Empty></td></tr>}
+                  {data.by_plan.map((p) => (
+                    <tr key={p.plan_id}>
+                      <td>{p.plan_name}</td>
+                      <td className="right mono">{p.total}</td>
+                      <td className="right mono">{p.pending}</td>
+                      <td className="right mono">{p.paid}</td>
+                      <td className="right mono">{p.verified}</td>
+                      <td className="right"><Money v={p.amount_due} /></td>
+                      <td className="right"><Money v={p.amount_verified} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </Card>
 
           <PushStatus period={period} />
 
           <Card title="依渠道分組（已驗證）">
-            <table>
-              <thead><tr><th>渠道</th><th className="right">筆數</th><th className="right">金額</th></tr></thead>
-              <tbody>
-                {data.by_channel_tag.length === 0 && <tr><td colSpan={3}><Empty>本期尚無已驗證款項</Empty></td></tr>}
-                {data.by_channel_tag.map((t, i) => (
-                  <tr key={i}>
-                    <td>{t.channel_tag_name ?? "（未指定）"}</td>
-                    <td className="right mono">{t.count}</td>
-                    <td className="right"><Money v={t.amount} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="tbl">
+              <table>
+                <thead><tr><th>渠道</th><th className="right">筆數</th><th className="right">金額</th></tr></thead>
+                <tbody>
+                  {data.by_channel_tag.length === 0 && <tr><td colSpan={3}><Empty>本期尚無已驗證款項</Empty></td></tr>}
+                  {data.by_channel_tag.map((t, i) => (
+                    <tr key={i}>
+                      <td>{t.channel_tag_name ?? "（未指定）"}</td>
+                      <td className="right mono">{t.count}</td>
+                      <td className="right"><Money v={t.amount} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </Card>
         </>
       )}

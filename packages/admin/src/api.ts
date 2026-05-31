@@ -24,7 +24,8 @@ function qs(params?: Record<string, string | number | undefined>): string {
 export interface Payment {
   id: number; period: string; amount: number; status: string; has_proof: number;
   screenshot_key: string | null; proof_deleted_at: string | null; payment_note: string | null;
-  verified_channel_tag_id: number | null; channel_tag_name: string | null; source: string;
+  verified_channel_tag_id: number | null; channel_tag_name: string | null;
+  declared_channel_tag_id: number | null; declared_channel_tag_name: string | null; source: string;
   rejected_reason: string | null; user_name: string; plan_name: string;
   paid_at: string | null; submitted_at: string | null; verified_by: string | null; due_date: string;
 }
@@ -45,6 +46,8 @@ export const api = {
   updateWorkspace: (b: unknown) => req("PATCH", "/workspace", b),
   rebuildPaymentMessage: () => req<{ message_id: string }>("POST", "/discord/payment-message"),
   reconcile: (period: string) => req<Reconcile>("GET", `/reconcile${qs({ period })}`),
+  initiateBilling: (b: { period: string; amounts: { plan_id: number; amount: number }[] }) =>
+    req<{ sent: boolean; updated_plans: number; updated_payments: number }>("POST", "/billing/initiate", b),
   payments: (p?: { period?: string; status?: string }) => req<{ payments: Payment[] }>("GET", `/payments${qs(p)}`),
   verify: (id: number, tagId: number | null) => req("POST", `/payments/${id}/verify`, { verified_channel_tag_id: tagId }),
   reject: (id: number, reason: string) => req("POST", `/payments/${id}/reject`, { rejected_reason: reason }),

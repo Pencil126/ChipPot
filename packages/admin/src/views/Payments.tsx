@@ -68,7 +68,7 @@ export function Payments() {
 function PaymentDetail({ payment, tags, onClose, onDone }: { payment: Payment; tags: ChannelTag[]; onClose: () => void; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [tagId, setTagId] = useState<number | "">(payment.verified_channel_tag_id ?? "");
+  const [tagId, setTagId] = useState<number | "">(payment.verified_channel_tag_id ?? payment.declared_channel_tag_id ?? "");
   const [reason, setReason] = useState("");
   const [amount, setAmount] = useState(String(payment.amount));
 
@@ -90,6 +90,7 @@ function PaymentDetail({ payment, tags, onClose, onDone }: { payment: Payment; t
         <dt>應繳日</dt><dd className="mono">{payment.due_date}</dd>
         <dt>來源</dt><dd>{payment.source}</dd>
         {payment.payment_note && (<><dt>使用者備註</dt><dd>{payment.payment_note}</dd></>)}
+        {payment.declared_channel_tag_name && (<><dt>申報渠道</dt><dd>{payment.declared_channel_tag_name}</dd></>)}
         {payment.channel_tag_name && (<><dt>認定渠道</dt><dd>{payment.channel_tag_name}</dd></>)}
         {payment.rejected_reason && (<><dt>退回原因</dt><dd>{payment.rejected_reason}</dd></>)}
       </dl>

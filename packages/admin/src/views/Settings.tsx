@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { api } from "../api";
-import { useAsync, Card, Field, Empty } from "../ui";
+import { api, currentPeriod } from "../api";
+import { useAsync, Card, Field, Empty, Modal } from "../ui";
 
 export function Settings() {
   const { data, loading, error } = useAsync(() => api.workspace(), []);
@@ -10,6 +10,7 @@ export function Settings() {
   const [delMsg, setDelMsg] = useState(false);
   const [guild, setGuild] = useState("");
   const [channel, setChannel] = useState("");
+  const [adminIds, setAdminIds] = useState("");
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -23,6 +24,7 @@ export function Settings() {
     setDelMsg(!!w.settings.delete_discord_original_message);
     setGuild(w.settings.discord_guild_id ?? "");
     setChannel(w.settings.discord_billing_channel_id ?? "");
+    setAdminIds((w.settings.admin_discord_ids ?? []).join(", "));
   }, [data]);
 
   async function save() {
@@ -36,6 +38,7 @@ export function Settings() {
           delete_discord_original_message: delMsg,
           discord_guild_id: guild,
           discord_billing_channel_id: channel,
+          admin_discord_ids: adminIds.split(",").map((s) => s.trim()).filter(Boolean),
         },
       });
       setSaved(true);
@@ -56,6 +59,7 @@ export function Settings() {
         <Field label="截圖保存月數 (retention)"><input type="number" value={retention} onChange={(e) => setRetention(e.target.value)} disabled={busy} /></Field>
         <Field label="Discord Guild ID"><input value={guild} onChange={(e) => setGuild(e.target.value)} disabled={busy} /></Field>
         <Field label="Discord 繳費頻道 ID"><input value={channel} onChange={(e) => setChannel(e.target.value)} disabled={busy} /></Field>
+        <Field label="可發起繳費的管理員 Discord ID（逗號分隔）"><input value={adminIds} onChange={(e) => setAdminIds(e.target.value)} disabled={busy} /></Field>
         <label style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16 }}>
           <input type="checkbox" checked={delMsg} onChange={(e) => setDelMsg(e.target.checked)} disabled={busy} /> 刪除 Discord 原始繳費訊息
         </label>
@@ -64,8 +68,56 @@ export function Settings() {
         <hr style={{ border: 0, borderTop: "1px solid var(--line)", margin: "22px 0 18px" }} />
         <div className="field__label">常駐繳費訊息</div>
         <RebuildMessage />
+
+        <hr style={{ border: 0, borderTop: "1px solid var(--line)", margin: "22px 0 18px" }} />
+        <InitiateBilling />
       </div>
     </Card>
+  );
+}
+
+function InitiateBilling() {
+  const plans = useAsync(() => api.plans(), []);
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <div className="field__label">發起繳費</div>
+      <button className="btn" onClick={() => setOpen(true)}>確認本期金額並發出開繳通知</button>
+      {open && plans.data && <InitiateModal plans={plans.data.plans.filter((p) => p.active)} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+function InitiateModal({ plans, onClose }: { plans: { id: number; name: string; monthly_amount: number }[]; onClose: () => void }) {
+  const [period, setPeriod] = useState(currentPeriod());
+  const [amounts, setAmounts] = useState<Record<number, string>>(() => Object.fromEntries(plans.map((p) => [p.id, String(p.monthly_amount)])));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  async function run() {
+    setBusy(true); setErr(null); setMsg(null);
+    try {
+      const r = await api.initiateBilling({
+        period,
+        amounts: plans.map((p) => ({ plan_id: p.id, amount: Number(amounts[p.id]) })),
+      });
+      setMsg(r.sent ? `✓ 已發出通知（更新 ${r.updated_plans} 方案 / ${r.updated_payments} 筆）` : `✓ 已更新金額（通知先前已發送）`);
+    } catch (e) { setErr((e as Error).message); }
+    setBusy(false);
+  }
+  return (
+    <Modal title="發起繳費" onClose={onClose}>
+      {err && <div className="error-banner">{err}</div>}
+      {msg && <div style={{ color: "var(--teal)", marginBottom: 10 }}>{msg}</div>}
+      <p style={{ color: "var(--muted)", fontSize: 13, margin: "0 0 12px" }}>修改金額即為該方案的新定價（下期沿用）；已繳／已驗證的紀錄不受影響。</p>
+      <Field label="期別"><input value={period} onChange={(e) => setPeriod(e.target.value)} placeholder="YYYY-MM" disabled={busy} /></Field>
+      {plans.map((p) => (
+        <Field key={p.id} label={`${p.name} 金額`}>
+          <input type="number" value={amounts[p.id] ?? ""} onChange={(e) => setAmounts((s) => ({ ...s, [p.id]: e.target.value }))} disabled={busy} />
+        </Field>
+      ))}
+      <button className="btn btn--primary" onClick={run} disabled={busy}>發起並通知</button>
+    </Modal>
   );
 }
 

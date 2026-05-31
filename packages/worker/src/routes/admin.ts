@@ -104,15 +104,16 @@ async function membersImport(req: Request, env: Env, ctx: RouteCtx): Promise<Res
   let startDate: string | undefined;
   const ct = req.headers.get("content-type") ?? "";
   if (ct.includes("multipart/form-data")) {
-    const form = await req.formData();
+    let form: FormData;
+    try { form = await req.formData(); } catch { return errorResponse(400, "expected a multipart form"); }
     const f = form.get("file");
     if (f && typeof f !== "string") csv = await (f as Blob).text();
     const sd = form.get("start_date");
-    if (typeof sd === "string" && sd) startDate = sd;
+    if (typeof sd === "string" && sd.trim()) startDate = sd.trim();
   } else {
-    const b = await readJson<{ csv?: string; start_date?: string }>(req);
-    csv = b?.csv ?? null;
-    startDate = b?.start_date;
+    const b = await readJson<{ csv?: unknown; start_date?: unknown }>(req);
+    if (typeof b?.csv === "string") csv = b.csv;
+    if (typeof b?.start_date === "string" && b.start_date.trim()) startDate = b.start_date.trim();
   }
   if (!csv) return errorResponse(400, "csv is required");
   if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) return errorResponse(400, "start_date must be YYYY-MM-DD");
@@ -150,14 +151,21 @@ async function updateUser(req: Request, env: Env, ctx: RouteCtx): Promise<Respon
   const before = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(id).first();
   if (!before) return errorResponse(404, "not found");
   const b = await readJson<{ display_name?: string; discord_id?: string; email?: string; note?: string }>(req) ?? {};
-  if (b.discord_id) {
+  const discordId = typeof b.discord_id === "string" && b.discord_id.trim() ? b.discord_id.trim() : null;
+  if (discordId) {
     const clash = await env.DB.prepare("SELECT id FROM users WHERE workspace_id = ? AND discord_id = ? AND id <> ?")
-      .bind(wsId(ctx), b.discord_id, id).first<{ id: number }>();
+      .bind(wsId(ctx), discordId, id).first<{ id: number }>();
     if (clash) return errorResponse(400, "此 Discord ID 已綁定其他成員");
   }
-  await env.DB.prepare(
-    `UPDATE users SET display_name = COALESCE(?, display_name), discord_id = ?, email = ?, note = ?, updated_at = ? WHERE id = ?`
-  ).bind(b.display_name ?? null, b.discord_id ?? null, b.email ?? null, b.note ?? null, nowUtcIso(), id).run();
+  try {
+    await env.DB.prepare(
+      `UPDATE users SET display_name = COALESCE(?, display_name), discord_id = ?, email = ?, note = ?, updated_at = ? WHERE id = ?`
+    ).bind(b.display_name ?? null, discordId, b.email ?? null, b.note ?? null, nowUtcIso(), id).run();
+  } catch (e) {
+    // Belt for the precheck's TOCTOU race: a concurrent bind to the same discord_id.
+    if (String((e as Error).message).includes("UNIQUE")) return errorResponse(400, "此 Discord ID 已綁定其他成員");
+    throw e;
+  }
   const after = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(id).first();
   await writeAudit(env.DB, { workspaceId: wsId(ctx), actor: actorOf(ctx), action: "user.update", entityType: "user", entityId: id, before, after });
   return json({ ok: true });

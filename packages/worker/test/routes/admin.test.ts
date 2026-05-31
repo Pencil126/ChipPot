@@ -188,9 +188,15 @@ describe("admin billing/initiate + declared channel", () => {
     expect(u).not.toBeNull();
   });
 
-  it("rejects a missing csv and a bad start_date", async () => {
+  it("rejects a missing csv, a non-string csv, and a bad start_date", async () => {
     expect((await call("POST", "/admin/members/import", {}))!.status).toBe(400);
+    expect((await call("POST", "/admin/members/import", { csv: 123 }))!.status).toBe(400);
     expect((await call("POST", "/admin/members/import", { csv: "姓名,帳號\nA,a@x.tw", start_date: "bad" }))!.status).toBe(400);
+  });
+
+  it("treats an empty start_date as the current month (no 400)", async () => {
+    const res = await call("POST", "/admin/members/import", { csv: "姓名,帳號,ChatGPT\nEmptyStart,emptystart@x.tw,FALSE", start_date: "" });
+    expect(res!.status).toBe(200);
   });
 
   it("PATCH /admin/users rejects a discord_id already bound to another member", async () => {

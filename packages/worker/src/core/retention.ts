@@ -45,16 +45,21 @@ export async function runRetention(
   for (const row of results) {
     try {
       // 1. Drop THIS payment's reference first (D1-first so this row never re-appears).
-      await env.DB
-        .prepare("UPDATE payments SET screenshot_key = NULL, proof_deleted_at = ?, updated_at = ? WHERE id = ?")
-        .bind(taipeiDate(now), nowUtcIso(), row.id)
+      //    Guard on the snapshotted key: if the row got a NEW proof since the SELECT, the
+      //    UPDATE matches 0 rows and we skip — never nulling a fresher key.
+      const upd = await env.DB
+        .prepare("UPDATE payments SET screenshot_key = NULL, proof_deleted_at = ?, updated_at = ? WHERE id = ? AND screenshot_key = ?")
+        .bind(taipeiDate(now), nowUtcIso(), row.id, row.screenshot_key)
         .run();
+      if ((upd.meta.changes ?? 0) === 0) continue; // changed concurrently — leave it for next run
       // 2. Only delete the R2 object when no OTHER payment still references the key.
       const ref = await env.DB
         .prepare("SELECT COUNT(*) AS c FROM payments WHERE screenshot_key = ?")
         .bind(row.screenshot_key)
         .first<{ c: number }>();
       if ((ref?.c ?? 0) === 0) {
+        // D1-first ordering is required for ref-counting correctness; a rare R2 delete failure
+        // here leaves an unreferenced object (logged below), not a dangling D1 reference.
         await env.BUCKET.delete(row.screenshot_key);
       }
       await writeAudit(env.DB, {

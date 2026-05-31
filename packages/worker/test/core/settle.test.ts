@@ -54,6 +54,18 @@ describe("settleUserPeriod — Discord direct path", () => {
     expect(r.alreadyPaidCount).toBe(2);
   });
 
+  it("compensates the proof object when nothing was settled (already paid)", async () => {
+    const before = (await env.BUCKET.list({ prefix: `${WS}/${PERIOD}/${WS}/` })).objects.length;
+    const r = await settleUserPeriod(env, {
+      workspaceId: WS, userId: WS, period: PERIOD, source: "user_slash",
+      proof: { body: new Uint8Array([7]), ext: "png", contentType: "image/png" },
+    });
+    expect(r.paidCount).toBe(0);
+    expect(r.screenshotKey).toBeNull(); // not orphaned
+    const after = (await env.BUCKET.list({ prefix: `${WS}/${PERIOD}/${WS}/` })).objects.length;
+    expect(after).toBe(before);
+  });
+
   it("shares ONE screenshot key across all settled rows", async () => {
     const r = await settleUserPeriod(env, {
       workspaceId: WS, userId: WS, period: "2027-03", source: "user_slash",

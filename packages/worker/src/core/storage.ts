@@ -212,6 +212,14 @@ export async function settleUserPeriod(env: Env, input: SettleInput): Promise<Se
     .bind(workspaceId, period, now, userId)
     .all<{ id: number; amount: number }>();
 
+  // TOCTOU guard: if a concurrent settle paid these rows between the settleTargets() snapshot
+  // and our UPDATE, the direct path can match 0 rows after we already stored the object —
+  // compensate so it isn't orphaned. (The token path throws before reaching here on 0 rows.)
+  if (paidRows.results.length === 0 && key) {
+    await deleteObject(env.BUCKET, key).catch(() => {});
+    key = null;
+  }
+
   return {
     paidCount: paidRows.results.length,
     totalAmount: paidRows.results.reduce((s, r) => s + r.amount, 0),
@@ -247,8 +255,10 @@ async function applyDirectSettle(
 /**
  * Web token path: a double-gated D1 batch. The payments UPDATE fires only while the token
  * is still unused; the token claim fires only once the payments carry our paid_at marker —
- * so both apply or neither, and the one-time token can't be spent twice. On an ambiguous
- * batch error we read back by the paid_at marker before deciding whether to compensate.
+ * so both apply or neither, and the one-time token can't be spent twice. The cross-gate that
+ * links the two statements is the unique screenshot_key when a proof is present (a per-call
+ * UUID — collision-proof), falling back to paid_at = now only for the note-only case. On an
+ * ambiguous batch error we read back by that same marker before deciding whether to compensate.
  */
 async function applyTokenSettle(
   env: Env, input: SettleInput, key: string | null, now: string
@@ -256,14 +266,19 @@ async function applyTokenSettle(
   const { workspaceId, userId, period } = input;
   const tokenHash = input.tokenHash!;
 
+  // Marker that uniquely identifies rows settled by THIS call: the proof key (unique UUID)
+  // when present, else paid_at = now. `(? IS NULL AND paid_at = ?)` activates the fallback
+  // only when no key was provided, so a concurrent same-millisecond settle can't satisfy it.
+  const markerClause = "((p.screenshot_key = ?) OR (? IS NULL AND p.paid_at = ?))";
+
   const landed = () =>
     env.DB
       .prepare(
         `SELECT 1 AS ok FROM payments p JOIN subscriptions s ON s.id = p.subscription_id
-         WHERE p.workspace_id = ? AND p.period = ? AND p.status = 'paid' AND p.paid_at = ?
+         WHERE p.workspace_id = ? AND p.period = ? AND p.status = 'paid' AND ${markerClause}
            AND s.user_id = ? AND s.status = 'active' LIMIT 1`
       )
-      .bind(workspaceId, period, now, userId)
+      .bind(workspaceId, period, key, key, now, userId)
       .first<{ ok: number }>()
       .catch(() => null);
 
@@ -296,13 +311,13 @@ async function applyTokenSettle(
            WHERE token_hash = ? AND user_id = ? AND period = ? AND workspace_id = ?
              AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?
              AND EXISTS (SELECT 1 FROM payments p JOIN subscriptions s ON s.id = p.subscription_id
-                         WHERE p.workspace_id = ? AND p.period = ? AND p.paid_at = ? AND p.status = 'paid'
+                         WHERE p.workspace_id = ? AND p.period = ? AND p.status = 'paid' AND ${markerClause}
                            AND s.user_id = ? AND s.status = 'active')`
         )
         .bind(
           now, input.source,
           tokenHash, userId, period, workspaceId, now,
-          workspaceId, period, now, userId
+          workspaceId, period, key, key, now, userId
         ),
     ]);
     payChanges = results[0]?.meta.changes ?? 0;

@@ -199,7 +199,7 @@ function InitiateModal({ plans, billingDay, onClose }: { plans: { id: number; na
       {err && <div className="error-banner">{err}</div>}
       {msg && <div style={{ color: "var(--teal)", marginBottom: 10 }}>{msg}</div>}
       <p style={{ color: "var(--muted)", fontSize: 13, margin: "0 0 12px" }}>修改金額即為該方案的新定價（下期沿用）；已繳／已驗證的紀錄不受影響。</p>
-      <Field label="期別"><input value={period} onChange={(e) => setPeriod(e.target.value)} placeholder="YYYY-MM" disabled={busy} /></Field>
+      <Field label="期別"><input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} disabled={busy} /></Field>
       {plans.map((p) => (
         <Field key={p.id} label={`${p.name} 金額`}>
           <input type="number" value={amounts[p.id] ?? ""} onChange={(e) => setAmounts((s) => ({ ...s, [p.id]: e.target.value }))} disabled={busy} />

@@ -28,7 +28,8 @@ export function Payments() {
   return (
     <>
       <div className="toolbar">
-        <label>期別 <input value={effPeriod} onChange={(e) => setPeriod(e.target.value)} placeholder="全部" style={{ width: 100 }} /></label>
+        <label>期別 <input type="month" value={effPeriod} onChange={(e) => setPeriod(e.target.value)} style={{ width: 160 }} /></label>
+        <button className="btn" onClick={() => setPeriod("")} disabled={!effPeriod} title="顯示全部期別">全部</button>
         <div className="pills">
           {STATUS_OPTS.map((o) => (
             <button key={o.v} className={`pill ${status === o.v ? "pill--on" : ""}`} onClick={() => setStatus(o.v)}>{o.label}</button>
@@ -197,7 +198,7 @@ function ManualModal({ tags, onClose, onDone }: { tags: ChannelTag[]; onClose: (
           {subs.data?.subscriptions.filter((s) => s.status === "active").map((s) => <option key={s.id} value={s.id}>{s.user_name} · {s.plan_name}</option>)}
         </select>
       </Field>
-      <Field label="期別"><input value={period} onChange={(e) => setPeriod(e.target.value)} placeholder="YYYY-MM" disabled={busy} /></Field>
+      <Field label="期別"><input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} disabled={busy} /></Field>
       <Field label="金額（留空＝方案金額）"><input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={busy} /></Field>
       <Field label="狀態">
         <select value={statusV} onChange={(e) => setStatusV(e.target.value)} disabled={busy}>
@@ -245,7 +246,7 @@ function LinkModal({ onClose }: { onClose: () => void }) {
           {users.data?.users.map((u) => <option key={u.id} value={u.id}>{u.display_name}</option>)}
         </select>
       </Field>
-      <Field label="期別"><input value={period} onChange={(e) => setPeriod(e.target.value)} placeholder="YYYY-MM" disabled={busy} /></Field>
+      <Field label="期別"><input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} disabled={busy} /></Field>
       <button className="btn btn--primary" disabled={busy} onClick={gen}>產生連結</button>
       {link && (
         <div style={{ marginTop: 16 }}>

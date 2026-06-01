@@ -17,7 +17,7 @@ beforeAll(async () => {
     env.DB.prepare(`INSERT INTO plans (id,workspace_id,name,provider,monthly_amount,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`).bind(PLAN_B, WS, "Claude", "anthropic", 251, TS, TS),
     env.DB.prepare(`INSERT INTO subscriptions (id,workspace_id,user_id,plan_id,start_date,billing_day,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`).bind(SUB_A, WS, WS, WS, "2027-01-01", 5, TS, TS),
     env.DB.prepare(`INSERT INTO subscriptions (id,workspace_id,user_id,plan_id,start_date,billing_day,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`).bind(SUB_B, WS, WS, PLAN_B, "2027-01-01", 5, TS, TS),
-    env.DB.prepare(`INSERT INTO channel_tags (id,workspace_id,name,type,active,sort_order,created_at) VALUES (?,?,?,?,?,?,?)`).bind(WS, WS, "LINE Pay", "linepay", 1, 1, TS),
+    env.DB.prepare(`INSERT INTO channel_tags (id,workspace_id,name,type,active,sort_order,created_at) VALUES (?,?,?,?,?,?,?)`).bind(WS, WS, "LINE Pay", "mobilepayment", 1, 1, TS),
     env.DB.prepare(`INSERT INTO channel_tags (id,workspace_id,name,type,active,sort_order,created_at) VALUES (?,?,?,?,?,?,?)`).bind(90201, WS, "停用", "other", 0, 2, TS),
     env.DB.prepare(`INSERT INTO payments (workspace_id,subscription_id,period,period_start,period_end,due_date,amount,status,source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).bind(WS, SUB_A, "2027-01", "2027-01-01", "2027-01-31", "2027-01-05", 315, "pending", "cron", TS, TS),
     env.DB.prepare(`INSERT INTO payments (workspace_id,subscription_id,period,period_start,period_end,due_date,amount,status,source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).bind(WS, SUB_B, "2027-01", "2027-01-01", "2027-01-31", "2027-01-05", 251, "pending", "cron", TS, TS),

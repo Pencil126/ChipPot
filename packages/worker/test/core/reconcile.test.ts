@@ -16,7 +16,7 @@ beforeAll(async () => {
     env.DB.prepare(`INSERT INTO plans (id,workspace_id,name,provider,monthly_amount,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`).bind(PLAN_CLAUDE, WS, "Claude Standard", "anthropic", 251, TS, TS),
     env.DB.prepare(`INSERT INTO subscriptions (id,workspace_id,user_id,plan_id,start_date,billing_day,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`).bind(SUB_GPT, WS, WS, PLAN_GPT, "2026-06-01", 5, TS, TS),
     env.DB.prepare(`INSERT INTO subscriptions (id,workspace_id,user_id,plan_id,start_date,billing_day,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`).bind(SUB_CLAUDE, WS, WS, PLAN_CLAUDE, "2026-06-01", 5, TS, TS),
-    env.DB.prepare(`INSERT INTO channel_tags (id,workspace_id,name,type,sort_order,created_at) VALUES (?,?,?,?,?,?)`).bind(TAG_LINEPAY, WS, "LINE Pay", "linepay", 1, TS),
+    env.DB.prepare(`INSERT INTO channel_tags (id,workspace_id,name,type,sort_order,created_at) VALUES (?,?,?,?,?,?)`).bind(TAG_LINEPAY, WS, "LINE Pay", "mobilepayment", 1, TS),
     // verified, with proof, via LINE Pay
     env.DB.prepare(`INSERT INTO payments (workspace_id,subscription_id,period,period_start,period_end,due_date,amount,status,has_proof,verified_channel_tag_id,source,created_at,updated_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(WS, SUB_GPT, "2026-06", "2026-06-01", "2026-06-30", "2026-06-05", 315, "verified", 1, TAG_LINEPAY, "user_web", TS, TS),

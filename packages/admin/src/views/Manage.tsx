@@ -184,13 +184,22 @@ function PlanModal({ plan, onClose, onDone }: { plan: Plan | null; onClose: () =
 }
 
 // ── Channel tags ──────────────────────────────────────────────────────────────
+// type is a coarse category (umbrella); the channel itself is the `name`. New methods like
+// iPass Money are new rows under an existing type, no schema change.
+const CHANNEL_TYPES = [
+  { v: "mobilepayment", label: "行動支付" },
+  { v: "bank", label: "銀行轉帳" },
+  { v: "other", label: "其他" },
+];
+const CHANNEL_TYPE_LABEL: Record<string, string> = Object.fromEntries(CHANNEL_TYPES.map((t) => [t.v, t.label]));
+
 export function ChannelTags() {
   const { data, loading, error, reload } = useAsync(() => api.channelTags(), []);
   const [edit, setEdit] = useState<ChannelTag | null | undefined>(undefined);
   return (
     <>
       {error && <div className="error-banner">{error}</div>}
-      <Card title="渠道 Tag（對帳分組）" action={<button className="btn btn--primary" onClick={() => setEdit(null)}>新增 Tag</button>}>
+      <Card title="支付渠道（對帳分組）" action={<button className="btn btn--primary" onClick={() => setEdit(null)}>新增渠道</button>}>
         <div className="tbl">
           <table>
             <thead><tr><th>名稱</th><th>類型</th><th className="right">排序</th><th>啟用</th><th></th></tr></thead>
@@ -198,7 +207,7 @@ export function ChannelTags() {
               {loading && <tr><td colSpan={5}><Empty>載入中…</Empty></td></tr>}
               {data?.channel_tags.map((t) => (
                 <tr key={t.id}>
-                  <td>{t.name}</td><td>{t.type ?? "—"}</td><td className="right mono">{t.sort_order}</td><td>{t.active ? "✓" : "—"}</td>
+                  <td>{t.name}</td><td>{t.type ? (CHANNEL_TYPE_LABEL[t.type] ?? t.type) : "—"}</td><td className="right mono">{t.sort_order}</td><td>{t.active ? "✓" : "—"}</td>
                   <td className="right"><button className="btn" onClick={() => setEdit(t)}>編輯</button></td>
                 </tr>
               ))}
@@ -223,10 +232,10 @@ function TagModal({ tag, onClose, onDone }: { tag: ChannelTag | null; onClose: (
     } catch (e) { setErr((e as Error).message); setBusy(false); }
   }
   return (
-    <Modal title={tag ? "編輯 Tag" : "新增 Tag"} onClose={onClose}>
+    <Modal title={tag ? "編輯渠道" : "新增渠道"} onClose={onClose}>
       {err && <div className="error-banner">{err}</div>}
       <Field label="名稱"><input value={f.name} onChange={(e) => set("name", e.target.value)} disabled={busy} /></Field>
-      <Field label="類型"><select value={f.type ?? "other"} onChange={(e) => set("type", e.target.value)} disabled={busy}><option value="linepay">linepay</option><option value="bank">bank</option><option value="other">other</option></select></Field>
+      <Field label="類型"><select value={f.type ?? "other"} onChange={(e) => set("type", e.target.value)} disabled={busy}>{CHANNEL_TYPES.map((t) => <option key={t.v} value={t.v}>{t.label}</option>)}</select></Field>
       <Field label="排序"><input type="number" value={f.sort_order} onChange={(e) => set("sort_order", e.target.value)} disabled={busy} /></Field>
       <label style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14 }}><input type="checkbox" checked={!!f.active} onChange={(e) => set("active", e.target.checked ? 1 : 0)} disabled={busy} /> 啟用</label>
       <button className="btn btn--primary" onClick={save} disabled={busy}>儲存</button>

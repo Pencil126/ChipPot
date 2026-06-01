@@ -50,7 +50,7 @@ export function Dashboard() {
       <div className="toolbar">
         <label>
           期別{" "}
-          <input value={effPeriod} onChange={(e) => setPeriod(e.target.value)} placeholder="YYYY-MM" style={{ width: 110 }} />
+          <input type="month" value={effPeriod} onChange={(e) => setPeriod(e.target.value)} style={{ width: 160 }} />
         </label>
       </div>
       {error && <div className="error-banner">{error}</div>}

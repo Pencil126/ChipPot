@@ -28,7 +28,7 @@ beforeAll(async () => {
     env.DB.prepare(`INSERT INTO plans (id,workspace_id,name,provider,monthly_amount,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`).bind(PLAN_B, WS, "Claude", "anthropic", 251, TS, TS),
     env.DB.prepare(`INSERT INTO subscriptions (id,workspace_id,user_id,plan_id,start_date,billing_day,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`).bind(SUB_A, WS, WS, WS, "2026-06-01", 5, TS, TS),
     env.DB.prepare(`INSERT INTO subscriptions (id,workspace_id,user_id,plan_id,start_date,billing_day,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`).bind(SUB_B, WS, WS, PLAN_B, "2026-06-01", 5, TS, TS),
-    env.DB.prepare(`INSERT INTO channel_tags (id,workspace_id,name,type,sort_order,created_at) VALUES (?,?,?,?,?,?)`).bind(TAG, WS, "LINE Pay", "linepay", 1, TS),
+    env.DB.prepare(`INSERT INTO channel_tags (id,workspace_id,name,type,sort_order,created_at) VALUES (?,?,?,?,?,?)`).bind(TAG, WS, "LINE Pay", "mobilepayment", 1, TS),
     // unbound tokens (one settlement covers all the user's subs).
     env.DB.prepare(`INSERT INTO upload_tokens (token_hash,workspace_id,user_id,period,expires_at,created_at) VALUES (?,?,?,?,?,?)`).bind(okHash, WS, WS, "2026-06", FUTURE, TS),
     env.DB.prepare(`INSERT INTO upload_tokens (token_hash,workspace_id,user_id,period,expires_at,created_at) VALUES (?,?,?,?,?,?)`).bind(usedHash, WS, WS, "2026-06", PAST, TS),

@@ -10,7 +10,7 @@ const VIEWS = [
   { id: "users", label: "成員", el: <Users /> },
   { id: "subscriptions", label: "訂閱", el: <Subscriptions /> },
   { id: "plans", label: "方案", el: <Plans /> },
-  { id: "tags", label: "渠道 Tag", el: <ChannelTags /> },
+  { id: "tags", label: "支付渠道", el: <ChannelTags /> },
   { id: "settings", label: "設定", el: <Settings /> },
 ];
 
@@ -34,6 +34,7 @@ export default function App() {
             </button>
           ))}
         </nav>
+        <a className="sidebar__logout" href="/cdn-cgi/access/logout">↪ 登出</a>
         <div className="sidebar__foot">社團 AI 訂閱 · 管理後台</div>
       </aside>
       <main className="main">

@@ -24,6 +24,25 @@ Discord  ─┐                               ┌─ D1   (chippot-db)        SQ
   - `admin.<你的網域>` → 後台（後台 API 也走這個 host 的 `/api/*`）
   - worker 預設網址 `chippot.<你的帳號子網域>.workers.dev`（也可另綁自訂網域）
 
+### 子網域命名與憑證（重要）
+
+子網域**名稱完全可自訂**——`pay.` / `admin.` 只是慣例，要叫什麼都行。只要這幾處填**一致**即可：
+`wrangler.toml` 的 `WEB_ORIGIN` / `ADMIN_ORIGIN` / route `pattern`、兩個 Pages 的 Custom domains、
+web build 的 `VITE_API_BASE`、以及 Cloudflare Access application 的 domain。
+
+但**層數**有個 SSL 注意點：
+
+- ✅ **一層子網域**（`admin.<網域>`、`pay.<網域>`）：Cloudflare 免費的 Universal SSL 萬用憑證
+  `*.<網域>` 直接覆蓋，**零煩惱，建議用這種**。
+- ⚠️ **巢狀／兩層子網域**（例如 `admin.chippot.<網域>`）：Universal 萬用字只吃**一層**，
+  **不涵蓋** `admin.chippot.<網域>`。Pages 綁自訂網域時會為該確切 host 自動簽憑證（SPA 通常 OK），
+  但 worker route 的 host 與 Access 靠邊緣 zone 憑證終止 TLS，可能出現 HTTPS 錯誤。若要用巢狀，請
+  開 **Total TLS / Advanced Certificate Manager**（可簽 `*.chippot.<網域>`），或部署後實測 HTTPS 無誤再上。
+- 💡 想把品牌歸在 `chippot` 底下又免憑證煩惱：改用獨立網域，例如 `admin.chippot.app` / `pay.chippot.app`
+  ——這是 `chippot.app` 的**一層**子網域，Universal SSL 直接覆蓋。
+
+> 巢狀子網域沒有任何**功能**上的好處（route、Access、繳費流程都一樣運作），純粹是命名美觀。
+
 ---
 
 ## 1. 前置需求

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, currentPeriod, periodForBillingDay, type Payment, type ChannelTag } from "../api";
-import { useAsync, Card, Modal, Field, Empty, Money, StatusBadge } from "../ui";
+import { useAsync, Card, Modal, Field, Empty, Money, StatusBadge, IconCheck, IconWarning, IconX } from "../ui";
 
 const STATUS_OPTS = [
   { v: "", label: "全部" },
@@ -29,7 +29,7 @@ export function Payments() {
     <>
       <div className="toolbar">
         <label>期別 <input type="month" value={effPeriod} onChange={(e) => setPeriod(e.target.value)} style={{ width: 160 }} /></label>
-        <button className="btn" onClick={() => setPeriod("")} disabled={!effPeriod} title="顯示全部期別">全部</button>
+        <button className="btn" onClick={() => setPeriod("")} disabled={!effPeriod} title="顯示全部期別">全部期別</button>
         <div className="pills">
           {STATUS_OPTS.map((o) => (
             <button key={o.v} className={`pill ${status === o.v ? "pill--on" : ""}`} onClick={() => setStatus(o.v)}>{o.label}</button>
@@ -57,7 +57,7 @@ export function Payments() {
                   <td><StatusBadge status={p.status} /></td>
                   <td>{
                     ["paid", "verified"].includes(p.status)
-                      ? (p.has_proof ? <span className="proof-yes">✅ 有截圖</span> : <span className="proof-no">⚠️ 純聲明</span>)
+                      ? (p.has_proof ? <span className="proof-yes iconlbl"><IconCheck />有截圖</span> : <span className="proof-no iconlbl"><IconWarning />純聲明</span>)
                       : <span style={{ color: "var(--muted)" }}>—</span>
                   }</td>
                   <td style={{ fontSize: 12.5, color: "var(--muted)" }}>{p.source}</td>
@@ -94,8 +94,8 @@ function QuickVerify({ id, onDone }: { id: number; onDone: () => void }) {
     catch { setErr(true); setBusy(false); }
   }
   return (
-    <button className="btn" disabled={busy} onClick={run} title="標記已驗證（帶入申報渠道）">
-      {busy ? "…" : err ? "✗ 重試" : "✅ 驗證"}
+    <button className="btn iconlbl" disabled={busy} onClick={run} title="標記已驗證（帶入申報渠道）">
+      {busy ? "…" : err ? <><IconX />重試</> : <><IconCheck />驗證</>}
     </button>
   );
 }
@@ -136,7 +136,7 @@ function PaymentDetail({ payment, tags, onClose, onDone }: { payment: Payment; t
       {payment.has_proof === 1 && !payment.screenshot_key && payment.proof_deleted_at && (
         <p style={{ color: "var(--muted)" }}>截圖已依保存期於 {payment.proof_deleted_at} 刪除（對帳資料保留）。</p>
       )}
-      {!payment.has_proof && <p style={{ color: "var(--amber)" }}>⚠️ 無憑證，純聲明 — 請依備註與帳戶自行核對。</p>}
+      {!payment.has_proof && <p style={{ color: "var(--amber)" }}><IconWarning /> 無憑證，純聲明 — 請依備註與帳戶自行核對。</p>}
 
       <hr style={{ border: 0, borderTop: "1px solid var(--line)", margin: "18px 0" }} />
 

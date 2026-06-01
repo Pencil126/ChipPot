@@ -3,6 +3,7 @@ import { Dashboard } from "./views/Dashboard";
 import { Payments } from "./views/Payments";
 import { Users, Subscriptions, Plans, ChannelTags } from "./views/Manage";
 import { Settings } from "./views/Settings";
+import { IconLogout } from "./ui";
 
 const VIEWS = [
   { id: "dashboard", label: "對帳看板", el: <Dashboard /> },
@@ -34,7 +35,7 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <a className="sidebar__logout" href="/cdn-cgi/access/logout">↪ 登出</a>
+        <a className="sidebar__logout" href="/cdn-cgi/access/logout"><IconLogout /> 登出</a>
         <div className="sidebar__foot">社團 AI 訂閱 · 管理後台</div>
       </aside>
       <main className="main">

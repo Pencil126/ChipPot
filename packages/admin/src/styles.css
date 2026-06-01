@@ -41,10 +41,13 @@ button { font-family: inherit; }
 .nav button.on { background: var(--teal); color: #fff; font-weight: 500; }
 /* logout sits at the bottom of the (dark) sidebar, away from the white content */
 .sidebar__logout {
-  margin-top: auto; text-align: left; text-decoration: none; display: block;
+  margin-top: auto; text-align: left; text-decoration: none;
+  display: flex; align-items: center; gap: 8px;
   color: var(--sidebar-ink); padding: 10px 12px; border-radius: 9px; cursor: pointer;
   font-size: 14.5px; transition: background 0.15s, color 0.15s;
 }
+/* inline icon + label, vertically centered with a small gap */
+.iconlbl { display: inline-flex; align-items: center; gap: 5px; }
 .sidebar__logout:hover { background: rgba(255,255,255,0.06); color: #fff; }
 .sidebar__foot { font-size: 11.5px; color: rgba(207,227,223,0.55); padding: 6px 10px 0; }
 

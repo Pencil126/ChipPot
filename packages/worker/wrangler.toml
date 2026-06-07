@@ -7,31 +7,31 @@ workers_dev = true
 # Admin API: same-origin with the admin SPA (Pages) so the Access JWT reaches the worker.
 # Worker routes take precedence over Pages on the same hostname for matching paths.
 routes = [
-  { pattern = "admin.panspace.dev/api/*", zone_name = "panspace.dev" },
+  { pattern = "chippot-admin.pencil126.cc/api/*", zone_name = "pencil126.cc" },
 ]
 
 [[d1_databases]]
 binding = "DB"
-database_name = "chippot-db"
-database_id = "adf93584-5bfa-4376-b08d-b0847709ecfe"
+database_name = "chippot"
+database_id = "722a14d6-efa6-4c90-9f1f-c216dec67804"
 migrations_dir = "migrations"
 
 [[r2_buckets]]
 binding = "BUCKET"
-bucket_name = "chippot-proofs"
+bucket_name = "chippot"
 
 # Non-secret Discord config (public values). Bot token is a secret (wrangler secret put).
 [vars]
-DISCORD_APPLICATION_ID = "1510355256498978917"
-DISCORD_PUBLIC_KEY = "f322b974d23880e58e830ed8ac9b587ee48d1beb16887efb0bad6617b914e2de"
-WEB_ORIGIN = "https://pay.panspace.dev"
-ADMIN_ORIGIN = "https://admin.panspace.dev"
-ACCESS_TEAM_DOMAIN = "panspace"
-ACCESS_AUD = "6682958aadf8ca528792922ff3c7a0756ae8a15976180343ce85cb09cbf6f508"
+DISCORD_APPLICATION_ID = "1512731062122451025"
+DISCORD_PUBLIC_KEY = "52b904364f6481447197ef3570b1ec85b53c4a1d4ec2e390a9d4179fc3f793f0"
+WEB_ORIGIN = "https://chippot-pay.pencil126.cc"
+ADMIN_ORIGIN = "https://chippot-admin.pencil126.cc"
+ACCESS_TEAM_DOMAIN = "pencil126"
+ACCESS_AUD = "89316e15bc049081abccdaa377b1417f6efb197f27f45e35a4955c6c2f3669b7"
 # ⚠️ Set this to YOUR Cloudflare Access email before deploying — it's the admin allow-list.
 # Deploying with the placeholder will lock you out of the admin UI.
 ACCESS_ALLOWED_EMAILS = "owner@example.com"
 
 # 01:00 UTC = 09:00 Asia/Taipei, daily.
 [triggers]
-crons = ["0 1 * * *"]
+crons = ["0 5 * * *"]

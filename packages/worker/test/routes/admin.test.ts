@@ -363,4 +363,110 @@ describe("admin billing/initiate + declared channel", () => {
     expect(row?.provider).toBe("gemini");
     expect(row?.monthly_amount).toBe(400); // untouched fields preserved
   });
+
+  it("cascade-deletes a member with subscriptions + payments (+audit)", async () => {
+    const u = await call("POST", "/admin/users", { display_name: "DelMe", discord_id: "d-delme" });
+    const uid = ((await u!.json()) as any).id as number;
+    const s = await call("POST", "/admin/subscriptions", { user_id: uid, plan_id: 1, start_date: "2031-01-01" });
+    const sid = ((await s!.json()) as any).id as number;
+    const del = await call("DELETE", `/admin/users/${uid}`);
+    expect(del!.status).toBe(200);
+    const body = (await del!.json()) as any;
+    expect(body.deleted.subscriptions).toBe(1);
+    expect(body.deleted.payments).toBe(1);
+    const users = ((await (await call("GET", "/admin/users"))!.json()) as any).users;
+    expect(users.find((x: any) => x.id === uid)).toBeUndefined();
+    expect(await env.DB.prepare("SELECT id FROM subscriptions WHERE id = ?").bind(sid).first()).toBeNull();
+    const leftoverPay = await env.DB.prepare("SELECT COUNT(*) AS c FROM payments WHERE subscription_id = ?").bind(sid).first<{ c: number }>();
+    expect(leftoverPay?.c).toBe(0);
+    expect(await auditCount("user.delete", uid)).toBe(1);
+  });
+
+  it("cascade-deletes a subscription with its payments, leaving the member", async () => {
+    const u = await call("POST", "/admin/users", { display_name: "KeepMe" });
+    const uid = ((await u!.json()) as any).id as number;
+    const s = await call("POST", "/admin/subscriptions", { user_id: uid, plan_id: 1, start_date: "2031-02-01" });
+    const sid = ((await s!.json()) as any).id as number;
+    const del = await call("DELETE", `/admin/subscriptions/${sid}`);
+    expect(del!.status).toBe(200);
+    expect(((await del!.json()) as any).deleted.payments).toBe(1);
+    expect(await env.DB.prepare("SELECT id FROM subscriptions WHERE id = ?").bind(sid).first()).toBeNull();
+    expect(await env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(uid).first()).not.toBeNull();
+    expect(await auditCount("subscription.delete", sid)).toBe(1);
+  });
+
+  it("cascade-deletes cleanly when R2 is not configured (proof rows present)", async () => {
+    const u = await call("POST", "/admin/users", { display_name: "NoR2Del" });
+    const uid = ((await u!.json()) as any).id as number;
+    const s = await call("POST", "/admin/subscriptions", { user_id: uid, plan_id: 1, start_date: "2031-03-01" });
+    const sid = ((await s!.json()) as any).id as number;
+    await env.DB.prepare("UPDATE payments SET screenshot_key = ? WHERE subscription_id = ?").bind("1/2031-03/x/p.png", sid).run();
+    const prev = (env as any).BUCKET;
+    (env as any).BUCKET = undefined;
+    const del = await call("DELETE", `/admin/users/${uid}`);
+    (env as any).BUCKET = prev;
+    expect(del!.status).toBe(200);
+    expect(await env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(uid).first()).toBeNull();
+  });
+
+  it("cascade-delete removes the R2 proof object when R2 is configured", async () => {
+    const u = await call("POST", "/admin/users", { display_name: "R2Del" });
+    const uid = ((await u!.json()) as any).id as number;
+    const s = await call("POST", "/admin/subscriptions", { user_id: uid, plan_id: 1, start_date: "2031-07-01" });
+    const sid = ((await s!.json()) as any).id as number;
+    const key = "1/2031-07/r2del/p.png";
+    await putObject(env.BUCKET, key, new Uint8Array([1, 2, 3]), "image/png");
+    await env.DB.prepare("UPDATE payments SET screenshot_key = ? WHERE subscription_id = ?").bind(key, sid).run();
+    expect(await getObject(env.BUCKET, key)).not.toBeNull();
+    const del = await call("DELETE", `/admin/users/${uid}`);
+    expect(del!.status).toBe(200);
+    expect(await getObject(env.BUCKET, key)).toBeNull();
+  });
+
+  it("plan delete is blocked (409) while subscriptions reference it, allowed when none", async () => {
+    const p = await call("POST", "/admin/plans", { name: "DelPlan", provider: "openai", monthly_amount: 100 });
+    const pid = ((await p!.json()) as any).id as number;
+    const u = await call("POST", "/admin/users", { display_name: "PlanRef" });
+    const uid = ((await u!.json()) as any).id as number;
+    const s = await call("POST", "/admin/subscriptions", { user_id: uid, plan_id: pid, start_date: "2031-04-01" });
+    const sid = ((await s!.json()) as any).id as number;
+    expect((await call("DELETE", `/admin/plans/${pid}`))!.status).toBe(409);
+    await call("DELETE", `/admin/subscriptions/${sid}`);
+    const del = await call("DELETE", `/admin/plans/${pid}`);
+    expect(del!.status).toBe(200);
+    expect(await env.DB.prepare("SELECT id FROM plans WHERE id = ?").bind(pid).first()).toBeNull();
+    expect(await auditCount("plan.delete", pid)).toBe(1);
+  });
+
+  it("list endpoints report dependency counts", async () => {
+    const u = await call("POST", "/admin/users", { display_name: "Counter" });
+    const uid = ((await u!.json()) as any).id as number;
+    await call("POST", "/admin/subscriptions", { user_id: uid, plan_id: 1, start_date: "2031-06-01" });
+    const users = ((await (await call("GET", "/admin/users"))!.json()) as any).users;
+    const row = users.find((x: any) => x.id === uid);
+    expect(row.subscription_count).toBe(1);
+    expect(row.payment_count).toBeGreaterThanOrEqual(1);
+    const subs = ((await (await call("GET", "/admin/subscriptions"))!.json()) as any).subscriptions;
+    expect(subs.every((s: any) => typeof s.payment_count === "number")).toBe(true);
+    const plans = ((await (await call("GET", "/admin/plans"))!.json()) as any).plans;
+    expect(plans.find((p: any) => p.id === 1)?.subscription_count).toBeGreaterThanOrEqual(1);
+    const tags = ((await (await call("GET", "/admin/channel-tags"))!.json()) as any).channel_tags;
+    expect(tags.every((t: any) => typeof t.usage_count === "number")).toBe(true);
+  });
+
+  it("channel-tag delete is blocked (409) while a payment references it, allowed when none", async () => {
+    const t = await call("POST", "/admin/channel-tags", { name: "DelTag", type: "bank" });
+    const tid = ((await t!.json()) as any).id as number;
+    const u = await call("POST", "/admin/users", { display_name: "TagRef" });
+    const uid = ((await u!.json()) as any).id as number;
+    const s = await call("POST", "/admin/subscriptions", { user_id: uid, plan_id: 1, start_date: "2031-05-01" });
+    const sid = ((await s!.json()) as any).id as number;
+    await env.DB.prepare("UPDATE payments SET declared_channel_tag_id = ? WHERE subscription_id = ?").bind(tid, sid).run();
+    expect((await call("DELETE", `/admin/channel-tags/${tid}`))!.status).toBe(409);
+    await env.DB.prepare("UPDATE payments SET declared_channel_tag_id = NULL WHERE subscription_id = ?").bind(sid).run();
+    const del = await call("DELETE", `/admin/channel-tags/${tid}`);
+    expect(del!.status).toBe(200);
+    expect(await env.DB.prepare("SELECT id FROM channel_tags WHERE id = ?").bind(tid).first()).toBeNull();
+    expect(await auditCount("channel_tag.delete", tid)).toBe(1);
+  });
 });

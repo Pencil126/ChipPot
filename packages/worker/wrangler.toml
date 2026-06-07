@@ -16,10 +16,6 @@ database_name = "chippot"
 database_id = "722a14d6-efa6-4c90-9f1f-c216dec67804"
 migrations_dir = "migrations"
 
-[[r2_buckets]]
-binding = "BUCKET"
-bucket_name = "chippot"
-
 # Non-secret Discord config (public values). Bot token is a secret (wrangler secret put).
 [vars]
 DISCORD_APPLICATION_ID = "1512731062122451025"

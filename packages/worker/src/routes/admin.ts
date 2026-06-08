@@ -8,8 +8,8 @@ import { writeAudit } from "../core/audit";
 import { getPayment, verifyPayment, rejectPayment, overrideAmount, InvalidPaymentTransition } from "../core/payments";
 import { ensureFirstPayment, initiateBillingOpened } from "../core/billing";
 import { reconcilePeriod } from "../core/reconcile";
-import { createChannelMessage, editChannelMessage } from "../adapters/discord/api";
-import { payButtonRow } from "../adapters/discord/commands";
+import { createChannelMessage, editChannelMessage, registerGuildCommands } from "../adapters/discord/api";
+import { payButtonRow, PAY_COMMAND, INITIATE_COMMAND, BIND_COMMAND } from "../adapters/discord/commands";
 import { discordNotifier } from "../adapters/discord/notify";
 import { parseRosterCsv, importRoster } from "../core/import";
 import { sendOverdueForPeriod } from "../core/scheduled";
@@ -49,7 +49,7 @@ async function getWorkspace(_req: Request, env: Env, ctx: RouteCtx): Promise<Res
   const row = await env.DB.prepare("SELECT * FROM workspaces WHERE id = ?").bind(wsId(ctx))
     .first<{ id: number; name: string; billing_day: number; settings: string }>();
   if (!row) return errorResponse(404, "not found");
-  return json({ workspace: { ...row, settings: parseSettings(row.settings) } });
+  return json({ workspace: { ...row, settings: parseSettings(row.settings) }, r2_configured: !!env.BUCKET });
 }
 
 async function updateWorkspace(req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
@@ -174,7 +174,12 @@ async function membersImport(req: Request, env: Env, ctx: RouteCtx): Promise<Res
 
 async function listUsers(_req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
   const { results } = await env.DB
-    .prepare("SELECT * FROM users WHERE workspace_id = ? ORDER BY id")
+    .prepare(
+      `SELECT u.*,
+              (SELECT COUNT(*) FROM subscriptions s WHERE s.user_id = u.id AND s.workspace_id = u.workspace_id) AS subscription_count,
+              (SELECT COUNT(*) FROM payments p JOIN subscriptions s2 ON s2.id = p.subscription_id WHERE s2.user_id = u.id AND s2.workspace_id = u.workspace_id) AS payment_count
+       FROM users u WHERE u.workspace_id = ? ORDER BY u.id`
+    )
     .bind(wsId(ctx)).all();
   return json({ users: results });
 }
@@ -218,10 +223,66 @@ async function updateUser(req: Request, env: Env, ctx: RouteCtx): Promise<Respon
   return json({ ok: true });
 }
 
+async function deleteUser(_req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
+  const id = Number(ctx.params.id);
+  const ws = wsId(ctx);
+  const user = await env.DB.prepare("SELECT * FROM users WHERE id = ? AND workspace_id = ?").bind(id, ws).first();
+  if (!user) return errorResponse(404, "not found");
+
+  if (env.BUCKET) {
+    const keys = await env.DB.prepare(
+      `SELECT DISTINCT p.screenshot_key AS k FROM payments p
+       JOIN subscriptions s ON s.id = p.subscription_id
+       WHERE s.user_id = ? AND s.workspace_id = ? AND p.screenshot_key IS NOT NULL`
+    ).bind(id, ws).all<{ k: string }>();
+    for (const { k } of keys.results) await env.BUCKET.delete(k).catch(() => {});
+  }
+
+  const subCount = (await env.DB.prepare("SELECT COUNT(*) AS c FROM subscriptions WHERE user_id = ? AND workspace_id = ?").bind(id, ws).first<{ c: number }>())?.c ?? 0;
+  const payCount = (await env.DB.prepare(
+    "SELECT COUNT(*) AS c FROM payments WHERE subscription_id IN (SELECT id FROM subscriptions WHERE user_id = ? AND workspace_id = ?)"
+  ).bind(id, ws).first<{ c: number }>())?.c ?? 0;
+
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM payments WHERE subscription_id IN (SELECT id FROM subscriptions WHERE user_id = ? AND workspace_id = ?)").bind(id, ws),
+    env.DB.prepare("DELETE FROM upload_tokens WHERE user_id = ? AND workspace_id = ?").bind(id, ws),
+    env.DB.prepare("DELETE FROM subscriptions WHERE user_id = ? AND workspace_id = ?").bind(id, ws),
+    env.DB.prepare("DELETE FROM users WHERE id = ? AND workspace_id = ?").bind(id, ws),
+  ]);
+
+  await writeAudit(env.DB, { workspaceId: ws, actor: actorOf(ctx), action: "user.delete", entityType: "user", entityId: id, before: user, after: { deleted: { subscriptions: subCount, payments: payCount } } });
+  return json({ ok: true, deleted: { subscriptions: subCount, payments: payCount } });
+}
+
+async function deleteSubscription(_req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
+  const id = Number(ctx.params.id);
+  const ws = wsId(ctx);
+  const sub = await env.DB.prepare("SELECT * FROM subscriptions WHERE id = ? AND workspace_id = ?").bind(id, ws).first();
+  if (!sub) return errorResponse(404, "not found");
+
+  if (env.BUCKET) {
+    const keys = await env.DB.prepare("SELECT DISTINCT screenshot_key AS k FROM payments WHERE subscription_id = ? AND workspace_id = ? AND screenshot_key IS NOT NULL").bind(id, ws).all<{ k: string }>();
+    for (const { k } of keys.results) await env.BUCKET.delete(k).catch(() => {});
+  }
+
+  const payCount = (await env.DB.prepare("SELECT COUNT(*) AS c FROM payments WHERE subscription_id = ? AND workspace_id = ?").bind(id, ws).first<{ c: number }>())?.c ?? 0;
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM payments WHERE subscription_id = ? AND workspace_id = ?").bind(id, ws),
+    env.DB.prepare("DELETE FROM upload_tokens WHERE subscription_id = ? AND workspace_id = ?").bind(id, ws),
+    env.DB.prepare("DELETE FROM subscriptions WHERE id = ? AND workspace_id = ?").bind(id, ws),
+  ]);
+
+  await writeAudit(env.DB, { workspaceId: ws, actor: actorOf(ctx), action: "subscription.delete", entityType: "subscription", entityId: id, before: sub, after: { deleted: { payments: payCount } } });
+  return json({ ok: true, deleted: { payments: payCount } });
+}
+
 // ── Plans ──────────────────────────────────────────────────────────────────
 
 async function listPlans(_req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
-  const { results } = await env.DB.prepare("SELECT * FROM plans WHERE workspace_id = ? ORDER BY id").bind(wsId(ctx)).all();
+  const { results } = await env.DB.prepare(
+    `SELECT p.*, (SELECT COUNT(*) FROM subscriptions s WHERE s.plan_id = p.id AND s.workspace_id = p.workspace_id) AS subscription_count
+     FROM plans p WHERE p.workspace_id = ? ORDER BY p.id`
+  ).bind(wsId(ctx)).all();
   return json({ plans: results });
 }
 
@@ -254,11 +315,24 @@ async function updatePlan(req: Request, env: Env, ctx: RouteCtx): Promise<Respon
   return json({ ok: true });
 }
 
+async function deletePlan(_req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
+  const id = Number(ctx.params.id);
+  const ws = wsId(ctx);
+  const plan = await env.DB.prepare("SELECT * FROM plans WHERE id = ? AND workspace_id = ?").bind(id, ws).first();
+  if (!plan) return errorResponse(404, "not found");
+  const ref = await env.DB.prepare("SELECT COUNT(*) AS c FROM subscriptions WHERE plan_id = ? AND workspace_id = ?").bind(id, ws).first<{ c: number }>();
+  if ((ref?.c ?? 0) > 0) return errorResponse(409, "此方案仍有訂閱（含已取消的歷史訂閱）：請先刪除這些訂閱，或將方案改為「停用」以保留歷史");
+  await env.DB.prepare("DELETE FROM plans WHERE id = ? AND workspace_id = ?").bind(id, ws).run();
+  await writeAudit(env.DB, { workspaceId: ws, actor: actorOf(ctx), action: "plan.delete", entityType: "plan", entityId: id, before: plan });
+  return json({ ok: true });
+}
+
 // ── Subscriptions ─────────────────────────────────────────────────────────────
 
 async function listSubscriptions(_req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
   const { results } = await env.DB.prepare(
-    `SELECT s.*, u.display_name AS user_name, pl.name AS plan_name
+    `SELECT s.*, u.display_name AS user_name, pl.name AS plan_name,
+            (SELECT COUNT(*) FROM payments p WHERE p.subscription_id = s.id AND p.workspace_id = s.workspace_id) AS payment_count
      FROM subscriptions s JOIN users u ON u.id = s.user_id JOIN plans pl ON pl.id = s.plan_id
      WHERE s.workspace_id = ? ORDER BY s.id`
   ).bind(wsId(ctx)).all();
@@ -304,7 +378,10 @@ async function updateSubscription(req: Request, env: Env, ctx: RouteCtx): Promis
 // ── Channel tags ───────────────────────────────────────────────────────────
 
 async function listChannelTags(_req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
-  const { results } = await env.DB.prepare("SELECT * FROM channel_tags WHERE workspace_id = ? ORDER BY sort_order, id").bind(wsId(ctx)).all();
+  const { results } = await env.DB.prepare(
+    `SELECT ct.*, (SELECT COUNT(*) FROM payments p WHERE (p.verified_channel_tag_id = ct.id OR p.declared_channel_tag_id = ct.id) AND p.workspace_id = ct.workspace_id) AS usage_count
+     FROM channel_tags ct WHERE ct.workspace_id = ? ORDER BY ct.sort_order, ct.id`
+  ).bind(wsId(ctx)).all();
   return json({ channel_tags: results });
 }
 
@@ -330,6 +407,20 @@ async function updateChannelTag(req: Request, env: Env, ctx: RouteCtx): Promise<
   ).bind(b.name ?? null, b.type ?? null, b.active ?? null, b.sort_order ?? null, id).run();
   const after = await env.DB.prepare("SELECT * FROM channel_tags WHERE id = ?").bind(id).first();
   await writeAudit(env.DB, { workspaceId: wsId(ctx), actor: actorOf(ctx), action: "channel_tag.update", entityType: "channel_tag", entityId: id, before, after });
+  return json({ ok: true });
+}
+
+async function deleteChannelTag(_req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
+  const id = Number(ctx.params.id);
+  const ws = wsId(ctx);
+  const tag = await env.DB.prepare("SELECT * FROM channel_tags WHERE id = ? AND workspace_id = ?").bind(id, ws).first();
+  if (!tag) return errorResponse(404, "not found");
+  const ref = await env.DB.prepare(
+    "SELECT COUNT(*) AS c FROM payments WHERE workspace_id = ? AND (verified_channel_tag_id = ? OR declared_channel_tag_id = ?)"
+  ).bind(ws, id, id).first<{ c: number }>();
+  if ((ref?.c ?? 0) > 0) return errorResponse(409, "此渠道已被繳費紀錄參照，請改用停用");
+  await env.DB.prepare("DELETE FROM channel_tags WHERE id = ? AND workspace_id = ?").bind(id, ws).run();
+  await writeAudit(env.DB, { workspaceId: ws, actor: actorOf(ctx), action: "channel_tag.delete", entityType: "channel_tag", entityId: id, before: tag });
   return json({ ok: true });
 }
 
@@ -456,7 +547,7 @@ async function deleteProof(_req: Request, env: Env, ctx: RouteCtx): Promise<Resp
   const id = Number(ctx.params.id);
   const p = await getPayment(env.DB, id);
   if (!p) return errorResponse(404, "not found");
-  if (p.screenshot_key) await env.BUCKET.delete(p.screenshot_key);
+  if (p.screenshot_key && env.BUCKET) await env.BUCKET.delete(p.screenshot_key);
   await env.DB.prepare("UPDATE payments SET screenshot_key = NULL, proof_deleted_at = ?, updated_at = ? WHERE id = ?")
     .bind(taipeiDate(), nowUtcIso(), id).run();
   await writeAudit(env.DB, { workspaceId: p.workspace_id, actor: actorOf(ctx), action: "proof.delete", entityType: "payment", entityId: id, before: { screenshot_key: p.screenshot_key } });
@@ -471,12 +562,16 @@ async function createUploadLink(req: Request, env: Env, ctx: RouteCtx): Promise<
   const ws = wsId(ctx);
   const user = await env.DB.prepare("SELECT id FROM users WHERE id = ? AND workspace_id = ?").bind(b.user_id, ws).first();
   if (!user) return errorResponse(400, "invalid user");
+  // Fail loud rather than mint a token only to hand back a broken relative link.
+  if (!env.WEB_ORIGIN) return errorResponse(500, "WEB_ORIGIN is not configured");
   const { raw, expiresAt } = await issueUploadToken(env.DB, {
     workspaceId: ws, userId: b.user_id, period: b.period, subscriptionId: b.subscription_id ?? null,
     ttlMs: UPLOAD_TOKEN_TTL_MS,
   });
   await writeAudit(env.DB, { workspaceId: ws, actor: actorOf(ctx), action: "upload_link.create", entityType: "user", entityId: b.user_id, after: { period: b.period, subscription_id: b.subscription_id ?? null, expires_at: expiresAt } });
-  return json({ token: raw, path: `/u/${raw}`, expires_at: expiresAt }, { status: 201 });
+  const path = `/u/${raw}`;
+  const webOrigin = env.WEB_ORIGIN.replace(/\/$/, "");
+  return json({ token: raw, path, url: `${webOrigin}${path}`, expires_at: expiresAt }, { status: 201 });
 }
 
 // ── Discord persistent payment message (spec §11.4) ──────────────────────────
@@ -509,6 +604,24 @@ async function discordPaymentMessage(_req: Request, env: Env, ctx: RouteCtx): Pr
   return json({ ok: true, message_id: messageId });
 }
 
+async function discordRegisterCommands(_req: Request, env: Env, ctx: RouteCtx): Promise<Response> {
+  const ws = wsId(ctx);
+  const row = await env.DB.prepare("SELECT settings FROM workspaces WHERE id = ?").bind(ws).first<{ settings: string }>();
+  if (!row) return errorResponse(404, "not found");
+  const settings = parseSettings(row.settings);
+  const guildId = settings.discord_guild_id;
+  if (!guildId) return errorResponse(400, "discord_guild_id is not set");
+  if (!env.DISCORD_APPLICATION_ID) return errorResponse(400, "DISCORD_APPLICATION_ID is not set");
+  if (!env.DISCORD_BOT_TOKEN) return errorResponse(400, "bot token not configured");
+
+  const commands = [PAY_COMMAND, INITIATE_COMMAND, BIND_COMMAND];
+  const res = await registerGuildCommands(env.DISCORD_BOT_TOKEN, env.DISCORD_APPLICATION_ID, guildId, commands);
+  if (!res.ok) return errorResponse(502, "failed to register commands");
+
+  await writeAudit(env.DB, { workspaceId: ws, actor: actorOf(ctx), action: "discord.register_commands", entityType: "workspace", entityId: ws, after: { guild_id: guildId, count: commands.length } });
+  return json({ ok: true, registered: commands.length });
+}
+
 // ── Router ───────────────────────────────────────────────────────────────────
 
 export function buildAdminRouter(): Router<Env> {
@@ -524,15 +637,19 @@ export function buildAdminRouter(): Router<Env> {
     .get("/admin/users", listUsers)
     .post("/admin/users", createUser)
     .patch("/admin/users/:id", updateUser)
+    .delete("/admin/users/:id", deleteUser)
     .get("/admin/plans", listPlans)
     .post("/admin/plans", createPlan)
     .patch("/admin/plans/:id", updatePlan)
+    .delete("/admin/plans/:id", deletePlan)
     .get("/admin/subscriptions", listSubscriptions)
     .post("/admin/subscriptions", createSubscription)
     .patch("/admin/subscriptions/:id", updateSubscription)
+    .delete("/admin/subscriptions/:id", deleteSubscription)
     .get("/admin/channel-tags", listChannelTags)
     .post("/admin/channel-tags", createChannelTag)
     .patch("/admin/channel-tags/:id", updateChannelTag)
+    .delete("/admin/channel-tags/:id", deleteChannelTag)
     .get("/admin/payments", listPayments)
     .post("/admin/payments/manual", manualPayment)
     .post("/admin/payments/:id/verify", verifyPaymentHandler)
@@ -540,5 +657,6 @@ export function buildAdminRouter(): Router<Env> {
     .post("/admin/payments/:id/amount", overrideAmountHandler)
     .post("/admin/payments/:id/delete-proof", deleteProof)
     .post("/admin/upload-link", createUploadLink)
-    .post("/admin/discord/payment-message", discordPaymentMessage);
+    .post("/admin/discord/payment-message", discordPaymentMessage)
+    .post("/admin/discord/register-commands", discordRegisterCommands);
 }

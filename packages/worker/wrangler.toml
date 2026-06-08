@@ -4,8 +4,8 @@ compatibility_date = "2025-11-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
-# Admin API: same-origin with the admin SPA (Pages) so the Access JWT reaches the worker.
-# Worker routes take precedence over Pages on the same hostname for matching paths.
+# 後台 API 與 admin SPA 同源（同 hostname 下 worker route 優先於 Pages，對 /api/* 生效）。
+# 換成你自己的網域與 Cloudflare zone：
 routes = [
   { pattern = "chippot-admin.pencil126.cc/api/*", zone_name = "pencil126.cc" },
 ]
@@ -13,10 +13,18 @@ routes = [
 [[d1_databases]]
 binding = "DB"
 database_name = "chippot"
+# 執行 `wrangler d1 create chippot-db`（或在 Cloudflare 後台建 D1）後，把回傳的 id 填這裡：
 database_id = "722a14d6-efa6-4c90-9f1f-c216dec67804"
 migrations_dir = "migrations"
 
-# Non-secret Discord config (public values). Bot token is a secret (wrangler secret put).
+# 選填：不需要「成員上傳繳費截圖」可移除整個 [[r2_buckets]] 區塊（未綁 R2 時截圖上傳/檢視/
+# 自動保存清理停用，其餘功能正常）。需要截圖功能就保留，並先 `wrangler r2 bucket create chippot-proofs`。
+# [[r2_buckets]]
+# binding = "BUCKET"
+# bucket_name = "chippot-proofs"
+
+# 非機密的 Discord / Access 設定（公開值）。Bot token 是 secret，用 `wrangler secret put DISCORD_BOT_TOKEN`
+# 或後台 Worker → Settings → Variables and Secrets 設定，不寫在這裡。
 [vars]
 DISCORD_APPLICATION_ID = "1512731062122451025"
 DISCORD_PUBLIC_KEY = "52b904364f6481447197ef3570b1ec85b53c4a1d4ec2e390a9d4179fc3f793f0"
@@ -24,10 +32,7 @@ WEB_ORIGIN = "https://chippot-pay.pencil126.cc"
 ADMIN_ORIGIN = "https://chippot-admin.pencil126.cc"
 ACCESS_TEAM_DOMAIN = "pencil126"
 ACCESS_AUD = "89316e15bc049081abccdaa377b1417f6efb197f27f45e35a4955c6c2f3669b7"
-# ⚠️ Set this to YOUR Cloudflare Access email before deploying — it's the admin allow-list.
-# Deploying with the placeholder will lock you out of the admin UI.
-ACCESS_ALLOWED_EMAILS = "owner@example.com"
 
-# 01:00 UTC = 09:00 Asia/Taipei, daily.
+# 01:00 UTC = 09:00 Asia/Taipei，每天。
 [triggers]
 crons = ["0 5 * * *"]

@@ -70,6 +70,9 @@ describe("admin API", () => {
     const lRes = await call("POST", "/admin/upload-link", { user_id: userId, period: "2026-07", subscription_id: subId });
     expect(lRes!.status).toBe(201);
     const link = (await lRes!.json()) as any;
+    // url is a full absolute link built from WEB_ORIGIN, ending in the token path (no hardcoded domain).
+    expect(link.url).toMatch(/^https?:\/\/.+\/u\/.+$/);
+    expect(link.url.endsWith(link.path)).toBe(true);
     const tok = await findValidUploadToken(env.DB, await hashToken(link.token), nowUtcIso());
     expect(tok?.user_id).toBe(userId);
     expect(tok?.period).toBe("2026-07");
@@ -84,11 +87,26 @@ describe("admin API", () => {
     expect(await auditCount("payment.manual", mId)).toBe(1);
   });
 
+  it("upload-link 500s when WEB_ORIGIN is not configured", async () => {
+    const u = await call("POST", "/admin/users", { display_name: "NoOrigin" });
+    const uid = ((await u!.json()) as any).id as number;
+    const prev = (env as any).WEB_ORIGIN;
+    delete (env as any).WEB_ORIGIN;
+    const res = await call("POST", "/admin/upload-link", { user_id: uid, period: "2027-05" });
+    (env as any).WEB_ORIGIN = prev;
+    expect(res!.status).toBe(500);
+  });
+
   it("creates/rebuilds the persistent Discord payment message", async () => {
     await call("PATCH", "/admin/workspace", { settings: { discord_billing_channel_id: "chan-1" } });
+    // Supply the bot token locally (CI has no .dev.vars), then restore it — the later
+    // billing/initiate test doesn't stub fetch, so it must keep its no-real-send behavior.
+    const prevToken = (env as any).DISCORD_BOT_TOKEN;
+    (env as any).DISCORD_BOT_TOKEN = "test-bot-token";
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ id: "msg-123" }), { status: 200 })));
     const res = await call("POST", "/admin/discord/payment-message");
     vi.unstubAllGlobals();
+    (env as any).DISCORD_BOT_TOKEN = prevToken;
     expect(res!.status).toBe(200);
     expect(((await res!.json()) as any).message_id).toBe("msg-123");
   });
@@ -150,6 +168,33 @@ describe("admin API", () => {
     const res = await call("POST", `/admin/payments/${id}/reject`, { rejected_reason: "x" });
     expect(res!.status).toBe(409);
   });
+
+  it("reports r2_configured from the BUCKET binding", async () => {
+    const on = (await (await call("GET", "/admin/workspace"))!.json()) as any;
+    expect(on.r2_configured).toBe(true);
+    const prev = (env as any).BUCKET;
+    (env as any).BUCKET = undefined;
+    const off = (await (await call("GET", "/admin/workspace"))!.json()) as any;
+    (env as any).BUCKET = prev;
+    expect(off.r2_configured).toBe(false);
+  });
+
+  it("delete-proof still clears the DB column when R2 is not configured", async () => {
+    const key = "1/2026-10/1/noR2.png";
+    const ins = await env.DB.prepare(
+      `INSERT INTO payments (workspace_id,subscription_id,period,period_start,period_end,due_date,amount,status,has_proof,screenshot_key,source,created_at,updated_at)
+       SELECT 1, s.id, '2026-10', '2026-10-01','2026-10-31','2026-10-05', 315, 'paid', 1, ?, 'user_web', ?, ?
+       FROM subscriptions s WHERE s.workspace_id = 1 ORDER BY s.id LIMIT 1`
+    ).bind(key, nowUtcIso(), nowUtcIso()).run();
+    const pid = ins.meta.last_row_id as number;
+    const prev = (env as any).BUCKET;
+    (env as any).BUCKET = undefined;
+    const res = await call("POST", `/admin/payments/${pid}/delete-proof`);
+    (env as any).BUCKET = prev;
+    expect(res!.status).toBe(200);
+    const p = await getPayment(env.DB, pid);
+    expect(p?.screenshot_key).toBeNull();
+  });
 });
 
 describe("admin notifications", () => {
@@ -164,9 +209,12 @@ describe("admin notifications", () => {
     expect(st.billing_opened).toBeNull();
     expect(st.overdue).toBeNull();
 
+    const prevToken = (env as any).DISCORD_BOT_TOKEN;
+    (env as any).DISCORD_BOT_TOKEN = "test-bot-token";
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
     const r = await call("POST", "/admin/notifications/resend", { type: "overdue", period: "2028-03" });
     vi.unstubAllGlobals();
+    (env as any).DISCORD_BOT_TOKEN = prevToken;
     expect(r!.status).toBe(200);
     expect(((await r!.json()) as any).count).toBeGreaterThanOrEqual(1);
     st = (await (await call("GET", "/admin/notifications?period=2028-03"))!.json()) as any;
@@ -182,6 +230,39 @@ describe("admin notifications", () => {
     expect((await call("POST", "/admin/notifications/resend", { type: "bogus", period: "2028-03" }))!.status).toBe(400);
     expect((await call("POST", "/admin/notifications/reset", { type: "overdue", period: "bad" }))!.status).toBe(400);
     expect((await call("POST", "/admin/notifications/reset", { type: "overdue", period: ["2028-03"] }))!.status).toBe(400);
+  });
+});
+
+describe("admin discord slash registration", () => {
+  it("registers the three guild commands via the Discord API", async () => {
+    // guild id lives in workspace settings; bot token is a runtime secret.
+    await call("PATCH", "/admin/workspace", { settings: { discord_guild_id: "guild-777" } });
+    const prevToken = (env as any).DISCORD_BOT_TOKEN;
+    (env as any).DISCORD_BOT_TOKEN = "test-bot-token";
+    let captured: { url: string; body: any } | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: any) => {
+      captured = { url, body: JSON.parse(init.body) };
+      return new Response("[]", { status: 200 });
+    }));
+    const res = await call("POST", "/admin/discord/register-commands");
+    vi.unstubAllGlobals();
+    (env as any).DISCORD_BOT_TOKEN = prevToken;
+
+    expect(res!.status).toBe(200);
+    expect(((await res!.json()) as any).registered).toBe(3);
+    expect(captured!.url).toContain("/guilds/guild-777/commands");
+    const names = captured!.body.map((c: any) => c.name);
+    expect(names).toHaveLength(3);
+    expect(new Set(names)).toEqual(new Set(["繳費", "發起繳費", "綁定"])); // order-independent
+  });
+
+  it("400s when the bot token is not configured", async () => {
+    await call("PATCH", "/admin/workspace", { settings: { discord_guild_id: "guild-777" } });
+    const prevToken = (env as any).DISCORD_BOT_TOKEN;
+    delete (env as any).DISCORD_BOT_TOKEN;
+    const res = await call("POST", "/admin/discord/register-commands");
+    (env as any).DISCORD_BOT_TOKEN = prevToken;
+    expect(res!.status).toBe(400);
   });
 });
 
@@ -281,5 +362,111 @@ describe("admin billing/initiate + declared channel", () => {
     const row = await env.DB.prepare("SELECT provider, monthly_amount FROM plans WHERE id = ?").bind(planId).first<{ provider: string; monthly_amount: number }>();
     expect(row?.provider).toBe("gemini");
     expect(row?.monthly_amount).toBe(400); // untouched fields preserved
+  });
+
+  it("cascade-deletes a member with subscriptions + payments (+audit)", async () => {
+    const u = await call("POST", "/admin/users", { display_name: "DelMe", discord_id: "d-delme" });
+    const uid = ((await u!.json()) as any).id as number;
+    const s = await call("POST", "/admin/subscriptions", { user_id: uid, plan_id: 1, start_date: "2031-01-01" });
+    const sid = ((await s!.json()) as any).id as number;
+    const del = await call("DELETE", `/admin/users/${uid}`);
+    expect(del!.status).toBe(200);
+    const body = (await del!.json()) as any;
+    expect(body.deleted.subscriptions).toBe(1);
+    expect(body.deleted.payments).toBe(1);
+    const users = ((await (await call("GET", "/admin/users"))!.json()) as any).users;
+    expect(users.find((x: any) => x.id === uid)).toBeUndefined();
+    expect(await env.DB.prepare("SELECT id FROM subscriptions WHERE id = ?").bind(sid).first()).toBeNull();
+    const leftoverPay = await env.DB.prepare("SELECT COUNT(*) AS c FROM payments WHERE subscription_id = ?").bind(sid).first<{ c: number }>();
+    expect(leftoverPay?.c).toBe(0);
+    expect(await auditCount("user.delete", uid)).toBe(1);
+  });
+
+  it("cascade-deletes a subscription with its payments, leaving the member", async () => {
+    const u = await call("POST", "/admin/users", { display_name: "KeepMe" });
+    const uid = ((await u!.json()) as any).id as number;
+    const s = await call("POST", "/admin/subscriptions", { user_id: uid, plan_id: 1, start_date: "2031-02-01" });
+    const sid = ((await s!.json()) as any).id as number;
+    const del = await call("DELETE", `/admin/subscriptions/${sid}`);
+    expect(del!.status).toBe(200);
+    expect(((await del!.json()) as any).deleted.payments).toBe(1);
+    expect(await env.DB.prepare("SELECT id FROM subscriptions WHERE id = ?").bind(sid).first()).toBeNull();
+    expect(await env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(uid).first()).not.toBeNull();
+    expect(await auditCount("subscription.delete", sid)).toBe(1);
+  });
+
+  it("cascade-deletes cleanly when R2 is not configured (proof rows present)", async () => {
+    const u = await call("POST", "/admin/users", { display_name: "NoR2Del" });
+    const uid = ((await u!.json()) as any).id as number;
+    const s = await call("POST", "/admin/subscriptions", { user_id: uid, plan_id: 1, start_date: "2031-03-01" });
+    const sid = ((await s!.json()) as any).id as number;
+    await env.DB.prepare("UPDATE payments SET screenshot_key = ? WHERE subscription_id = ?").bind("1/2031-03/x/p.png", sid).run();
+    const prev = (env as any).BUCKET;
+    (env as any).BUCKET = undefined;
+    const del = await call("DELETE", `/admin/users/${uid}`);
+    (env as any).BUCKET = prev;
+    expect(del!.status).toBe(200);
+    expect(await env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(uid).first()).toBeNull();
+  });
+
+  it("cascade-delete removes the R2 proof object when R2 is configured", async () => {
+    const u = await call("POST", "/admin/users", { display_name: "R2Del" });
+    const uid = ((await u!.json()) as any).id as number;
+    const s = await call("POST", "/admin/subscriptions", { user_id: uid, plan_id: 1, start_date: "2031-07-01" });
+    const sid = ((await s!.json()) as any).id as number;
+    const key = "1/2031-07/r2del/p.png";
+    await putObject(env.BUCKET, key, new Uint8Array([1, 2, 3]), "image/png");
+    await env.DB.prepare("UPDATE payments SET screenshot_key = ? WHERE subscription_id = ?").bind(key, sid).run();
+    expect(await getObject(env.BUCKET, key)).not.toBeNull();
+    const del = await call("DELETE", `/admin/users/${uid}`);
+    expect(del!.status).toBe(200);
+    expect(await getObject(env.BUCKET, key)).toBeNull();
+  });
+
+  it("plan delete is blocked (409) while subscriptions reference it, allowed when none", async () => {
+    const p = await call("POST", "/admin/plans", { name: "DelPlan", provider: "openai", monthly_amount: 100 });
+    const pid = ((await p!.json()) as any).id as number;
+    const u = await call("POST", "/admin/users", { display_name: "PlanRef" });
+    const uid = ((await u!.json()) as any).id as number;
+    const s = await call("POST", "/admin/subscriptions", { user_id: uid, plan_id: pid, start_date: "2031-04-01" });
+    const sid = ((await s!.json()) as any).id as number;
+    expect((await call("DELETE", `/admin/plans/${pid}`))!.status).toBe(409);
+    await call("DELETE", `/admin/subscriptions/${sid}`);
+    const del = await call("DELETE", `/admin/plans/${pid}`);
+    expect(del!.status).toBe(200);
+    expect(await env.DB.prepare("SELECT id FROM plans WHERE id = ?").bind(pid).first()).toBeNull();
+    expect(await auditCount("plan.delete", pid)).toBe(1);
+  });
+
+  it("list endpoints report dependency counts", async () => {
+    const u = await call("POST", "/admin/users", { display_name: "Counter" });
+    const uid = ((await u!.json()) as any).id as number;
+    await call("POST", "/admin/subscriptions", { user_id: uid, plan_id: 1, start_date: "2031-06-01" });
+    const users = ((await (await call("GET", "/admin/users"))!.json()) as any).users;
+    const row = users.find((x: any) => x.id === uid);
+    expect(row.subscription_count).toBe(1);
+    expect(row.payment_count).toBeGreaterThanOrEqual(1);
+    const subs = ((await (await call("GET", "/admin/subscriptions"))!.json()) as any).subscriptions;
+    expect(subs.every((s: any) => typeof s.payment_count === "number")).toBe(true);
+    const plans = ((await (await call("GET", "/admin/plans"))!.json()) as any).plans;
+    expect(plans.find((p: any) => p.id === 1)?.subscription_count).toBeGreaterThanOrEqual(1);
+    const tags = ((await (await call("GET", "/admin/channel-tags"))!.json()) as any).channel_tags;
+    expect(tags.every((t: any) => typeof t.usage_count === "number")).toBe(true);
+  });
+
+  it("channel-tag delete is blocked (409) while a payment references it, allowed when none", async () => {
+    const t = await call("POST", "/admin/channel-tags", { name: "DelTag", type: "bank" });
+    const tid = ((await t!.json()) as any).id as number;
+    const u = await call("POST", "/admin/users", { display_name: "TagRef" });
+    const uid = ((await u!.json()) as any).id as number;
+    const s = await call("POST", "/admin/subscriptions", { user_id: uid, plan_id: 1, start_date: "2031-05-01" });
+    const sid = ((await s!.json()) as any).id as number;
+    await env.DB.prepare("UPDATE payments SET declared_channel_tag_id = ? WHERE subscription_id = ?").bind(tid, sid).run();
+    expect((await call("DELETE", `/admin/channel-tags/${tid}`))!.status).toBe(409);
+    await env.DB.prepare("UPDATE payments SET declared_channel_tag_id = NULL WHERE subscription_id = ?").bind(sid).run();
+    const del = await call("DELETE", `/admin/channel-tags/${tid}`);
+    expect(del!.status).toBe(200);
+    expect(await env.DB.prepare("SELECT id FROM channel_tags WHERE id = ?").bind(tid).first()).toBeNull();
+    expect(await auditCount("channel_tag.delete", tid)).toBe(1);
   });
 });

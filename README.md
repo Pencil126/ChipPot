@@ -9,7 +9,7 @@
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
-![Vitest](https://img.shields.io/badge/tests-152%20passing-0f6e63?logo=vitest&logoColor=white)
+![Vitest](https://img.shields.io/badge/tests-243%20passing-0f6e63?logo=vitest&logoColor=white)
 ![Serverless](https://img.shields.io/badge/100%25-serverless-074340)
 
 <br/>
@@ -48,18 +48,23 @@ pre-wired) and a multi-workspace-ready data model, so it generalizes well beyond
 - 💳 **Discord-first payments** — a persistent **繳費** button → pick a channel → done. One submit
   settles *all* of a member's subscriptions for the period (multi-plan aggregation).
 - 🔗 **Self-service linking** — members link their Discord account to the roster themselves
-  (`/綁定` or the pay button); admins can also assign IDs by hand.
+  (`/綁定`, the pay button, or a persistent public **綁定** button posted in the channel); admins can also assign IDs by hand.
 - 📥 **CSV roster import** — onboard an existing roster (e.g. a Google-Forms export) in one upload:
   upsert members + subscriptions, idempotent re-runs.
 - 🧾 **Review queue + reconciliation** — an admin dashboard with per-plan / per-channel totals, a
-  one-click verify queue, manual back-fill, and frozen period amounts (price changes never rewrite history).
+  one-click verify queue, manual back-fill, single-payment delete, undo-verify, and frozen period
+  amounts (price changes never rewrite history). A **重新同步本期帳單** action re-aligns an opened
+  period's bills to the current roster/price (preview before applying), optionally pinging newly-added members.
 - 🔔 **Customizable notifications** — editable templates (with live preview + validation) for the
   billing-opened notice, the batched overdue reminder, and the persistent pay message.
+- 📲 **Submission alerts** — when a member submits a payment, push the owner a Bark and/or webhook
+  notice (Discord / Google Chat / Slack — body shape auto-detected by host) with a deep link
+  straight to that payment's review row.
 - ⏰ **Daily cron, idempotent** — opens billing, sends one batched overdue reminder per period, and
   enforces screenshot retention — all deduped through `notification_logs`.
 - 🛡️ **Access-gated admin** — the whole admin host sits behind Cloudflare Access (email OTP); the
   SPA and its API are same-origin so the Access JWT reaches the Worker.
-- 🧪 **Real-runtime tests** — 152 Vitest cases run against actual Miniflare D1 + R2 (FK constraints
+- 🧪 **Real-runtime tests** — 243 Vitest cases run against actual Miniflare D1 + R2 (FK constraints
   enforced), not mocks.
 
 ## How a payment flows
@@ -152,8 +157,8 @@ pnpm --filter @chippot/worker test
 pnpm --filter @chippot/worker typecheck
 pnpm --filter @chippot/worker dev          # local wrangler dev
 
-# Frontends
-pnpm --filter @chippot/web build
+# Frontends — the web build requires VITE_API_BASE (your worker URL); admin does not
+VITE_API_BASE=https://chippot.<your-subdomain>.workers.dev pnpm --filter @chippot/web build
 pnpm --filter @chippot/admin build
 ```
 
@@ -171,16 +176,17 @@ so DB tests seed real parents and use a distinct id-space (9001+).
 # 1. Worker — applies D1 migrations, then deploys (carries the cron + admin.example.com/api route)
 pnpm --filter @chippot/worker run deploy
 
-# 2. Frontends → Pages
-cd packages/web   && pnpm build && wrangler pages deploy dist --project-name chippot-web   --branch main
+# 2. Frontends → Pages (the web build needs VITE_API_BASE = your worker URL)
+cd packages/web   && VITE_API_BASE=https://chippot.<your-subdomain>.workers.dev pnpm build && wrangler pages deploy dist --project-name chippot-web   --branch main
 cd packages/admin && pnpm build && wrangler pages deploy dist --project-name chippot-admin --branch main
 
 # 3. Register the guild slash commands (/繳費 · /發起繳費 · /綁定) — needs DISCORD_BOT_TOKEN, DISCORD_APPLICATION_ID, DISCORD_GUILD_ID in packages/worker/.dev.vars
 pnpm --filter @chippot/worker register
 ```
 
-Provision your own resources (D1, R2, an Access application) and fill in `wrangler.toml`
-accordingly — `database_id`, the R2 bucket, `ACCESS_*`, and the Discord vars.
+Provision your own resources (D1 and an Access application; **R2 is optional** — only needed for
+payment screenshots) and fill in `wrangler.toml` accordingly — `database_id`, the R2 bucket (drop
+`[[r2_buckets]]` to skip), `ACCESS_*`, and the Discord vars.
 
 ## Configuration
 
@@ -190,7 +196,9 @@ accordingly — `database_id`, the R2 bucket, `ACCESS_*`, and the Discord vars.
   `WEB_ORIGIN`, `ADMIN_ORIGIN`, `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`.
 - **Workspace settings** (in D1, edited from the admin **Settings** page) — billing day, overdue
   days, screenshot retention, Discord guild / channel ids, the admin allow-list
-  (`admin_discord_ids`), and the three editable notification templates.
+  (`admin_discord_ids`), the three editable notification templates, and optional
+  **payment-submission alerts** (a Bark URL template and/or an incoming webhook; the alert's review
+  deep link is built from `ADMIN_ORIGIN`, so no extra config is needed for it).
 - **Discord** — set the app's Interactions Endpoint to the Worker's `/interactions`, then register
   the guild commands with the script above.
 
@@ -199,11 +207,20 @@ accordingly — `database_id`, the R2 bucket, `ACCESS_*`, and the Discord vars.
 - **Members & subscriptions** — add manually or bulk-import a CSV; creating a subscription opens
   its first period bill.
 - **Review queue** — Payments → status pills → the **已繳待驗** queue floats to the top → one-click
-  ✅ verify (or open a row for screenshots, channel, reject, amount override, delete proof).
+  ✅ verify (or open a row for screenshots, channel, reject, amount override, delete proof, **撤回驗證**
+  to undo a mistaken verify, or **delete the whole bill**).
+- **重新同步本期帳單** — on Payments, re-align the selected opened period's bills to the current
+  roster/price (add missing · remove de-subscribed · reprice pending · freeze settled), with a preview
+  before applying and an option to ping newly-added members with the pay button.
 - **發起繳費** — confirm this period's per-plan amounts (any change becomes the plan's new price),
   then post the billing-opened notice. Triggerable from the admin Settings or Discord's `/發起繳費`.
+- **綁定按鈕** — Settings → 工具 → post a persistent public **綁定 Discord** button to the channel so
+  members self-link proactively (in addition to binding at first payment).
 - **Push status** — the dashboard shows whether the billing-opened / overdue notices went out, with
   **Resend now** (force) and **Reset** controls.
+- **Submission alerts** — set a Bark URL and/or a webhook (Discord / Google Chat / Slack) under
+  Settings → 繳費通知; each new submission then pushes you a notice with a one-tap deep link to its
+  review row. Both are optional and best-effort (a slow or failing endpoint never blocks the payment).
 - **Daily cron** (01:00 UTC = 09:00 Asia/Taipei) — idempotently opens each period's bills, posts the
   billing-opened notice (tagging plan roles), sends **one batched overdue reminder per period**
   listing all unpaid members, and runs screenshot retention. Everything dedups via `notification_logs`.

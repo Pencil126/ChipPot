@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { api, currentPeriod, periodForBillingDay, type Payment, type ChannelTag } from "../api";
-import { useAsync, Card, Modal, Field, Empty, Money, StatusBadge, IconCheck, IconWarning, IconX } from "../ui";
+import { useEffect, useState } from "react";
+import { api, currentPeriod, periodForBillingDay, type Payment, type ChannelTag, type ReconcileDiff } from "../api";
+import { useAsync, Card, Modal, Field, Empty, Money, Stat, StatusBadge, IconCheck, IconWarning, IconX } from "../ui";
 
 const STATUS_OPTS = [
   { v: "", label: "全部" },
@@ -9,6 +9,14 @@ const STATUS_OPTS = [
   { v: "verified", label: "已驗證" },
   { v: "rejected", label: "已退回" },
 ];
+
+// Read the deep-link payment id from "#payments?id=42"; null if absent or not a positive integer.
+function paymentIdFromHash(): number | null {
+  const q = window.location.hash.split("?")[1];
+  const raw = q ? new URLSearchParams(q).get("id") : null;
+  const id = raw ? Number(raw) : NaN;
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
 
 export function Payments() {
   const ws = useAsync(() => api.workspace(), []);
@@ -22,8 +30,31 @@ export function Payments() {
   const [selected, setSelected] = useState<Payment | null>(null);
   const [showManual, setShowManual] = useState(false);
   const [showLink, setShowLink] = useState(false);
+  const [sync, setSync] = useState(false);
 
   const reload = () => { list.reload(); };
+
+  // Deep link from a payment notification (#payments?id=42): fetch that payment directly (it may be
+  // outside the current period/status filter) and open its review modal, then clean the query so a
+  // refresh doesn't reopen it. Re-runs on hashchange so navigating between links works.
+  const [deepId, setDeepId] = useState<number | null>(() => paymentIdFromHash());
+  useEffect(() => {
+    const onHash = () => setDeepId(paymentIdFromHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  useEffect(() => {
+    if (deepId == null) return;
+    let cancelled = false;
+    api.payments({}).then((r) => {
+      if (cancelled) return;
+      const p = r.payments.find((x) => x.id === deepId);
+      if (p) setSelected(p);
+      setDeepId(null);
+      if (window.location.hash.includes("?")) history.replaceState(null, "", "#payments");
+    }).catch(() => { if (!cancelled) setDeepId(null); });
+    return () => { cancelled = true; };
+  }, [deepId]);
 
   return (
     <>
@@ -36,6 +67,7 @@ export function Payments() {
           ))}
         </div>
         <div className="grow" style={{ flex: 1 }} />
+        <button className="btn" disabled={!effPeriod} title={effPeriod ? "對齊本期帳單到目前名單／現價" : "請先選擇單一期別"} onClick={() => setSync(true)}>重新同步本期</button>
         <button className="btn" onClick={() => setShowLink(true)}>產生上傳連結</button>
         <button className="btn btn--primary" onClick={() => setShowManual(true)}>手動補登</button>
       </div>
@@ -81,7 +113,79 @@ export function Payments() {
       )}
       {showManual && <ManualModal tags={tags.data?.channel_tags ?? []} onClose={() => setShowManual(false)} onDone={() => { setShowManual(false); reload(); }} />}
       {showLink && <LinkModal onClose={() => setShowLink(false)} />}
+      {sync && effPeriod && <SyncModal key={effPeriod} period={effPeriod} onClose={() => setSync(false)} onDone={() => reload()} />}
     </>
+  );
+}
+
+function DiffList({ title, rows }: { title: string; rows: string[] }) {
+  return (
+    <details style={{ margin: "6px 0" }}>
+      <summary style={{ cursor: "pointer" }}>{title}（{rows.length}）</summary>
+      <ul style={{ margin: "6px 0 0 18px", color: "var(--muted)", fontSize: 13 }}>
+        {rows.map((r, i) => <li key={i}>{r}</li>)}
+      </ul>
+    </details>
+  );
+}
+
+function SyncModal({ period, onClose, onDone }: { period: string; onClose: () => void; onDone: () => void }) {
+  const [diff, setDiff] = useState<ReconcileDiff | null>(null);
+  const [busy, setBusy] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [notify, setNotify] = useState(true);
+  const [done, setDone] = useState<string | null>(null);
+
+  useEffect(() => {
+    let off = false;
+    api.syncPeriodBills(period, { dry_run: true })
+      .then((d) => { if (!off) { setDiff(d as ReconcileDiff); setBusy(false); } })
+      .catch((e) => { if (!off) { setErr((e as Error).message); setBusy(false); } });
+    return () => { off = true; };
+  }, [period]);
+
+  const boundAdds = diff?.add?.filter((a) => a.discord_id) ?? [];
+  const changes = diff ? diff.add.length + diff.remove.length + diff.reprice.length : 0;
+
+  async function apply() {
+    if (busy) return; // belt: button is also disabled while in-flight
+    setBusy(true); setErr(null);
+    try {
+      const r = await api.syncPeriodBills(period, { dry_run: false, notify_added: notify && boundAdds.length > 0 }) as any;
+      setDone(`已套用：新增 ${r.applied.added}、移除 ${r.applied.removed}、改價 ${r.applied.repriced}、保留 ${r.applied.frozen}` + (r.notified ? `；已通知 ${r.notified} 位新成員` : ""));
+      onDone();
+    } catch (e) { setErr((e as Error).message); setBusy(false); }
+  }
+
+  return (
+    <Modal title={`重新同步本期帳單 · ${period}`} onClose={onClose}>
+      {err && <div className="error-banner">{err}</div>}
+      {busy && !diff && <Empty>計算差異中…</Empty>}
+      {done && <div style={{ color: "var(--teal)", padding: "8px 0" }}>{done}</div>}
+      {diff && !diff.opened && !done && <p style={{ color: "var(--muted)" }}>此期尚未發起繳費，無需同步。</p>}
+      {diff && diff.opened && !done && (
+        <>
+          <div className="stats">
+            <Stat label="➕ 新增" value={diff.add.length} />
+            <Stat label="➖ 移除" value={diff.remove.length} />
+            <Stat label="🔄 改價" value={diff.reprice.length} />
+            <Stat label="🔒 保留(已繳)" value={diff.frozen_count} />
+          </div>
+          {diff.add.length > 0 && <DiffList title="新增" rows={diff.add.map((a) => `${a.user_name}·${a.plan_name} NT$${a.amount.toLocaleString()}`)} />}
+          {diff.remove.length > 0 && <DiffList title="移除（已退訂）" rows={diff.remove.map((a) => `${a.user_name}·${a.plan_name} NT$${a.amount.toLocaleString()}`)} />}
+          {diff.reprice.length > 0 && <DiffList title="改價" rows={diff.reprice.map((a) => `${a.user_name}·${a.plan_name} ${a.from}→${a.to}`)} />}
+          {boundAdds.length > 0 && (
+            <label style={{ display: "flex", gap: 8, alignItems: "center", margin: "12px 0" }}>
+              <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} />
+              在頻道 @ 通知這 {boundAdds.length} 位新成員並附繳費按鈕
+            </label>
+          )}
+          {changes === 0
+            ? <p style={{ color: "var(--muted)" }}>本期已是最新，無需變更。</p>
+            : <button className="btn btn--primary" disabled={busy} onClick={apply}>確認套用</button>}
+        </>
+      )}
+    </Modal>
   );
 }
 
@@ -151,6 +255,7 @@ function PaymentDetail({ payment, tags, onClose, onDone }: { payment: Payment; t
 
       <div className="btn-row">
         {canVerify && <button className="btn btn--primary" disabled={busy} onClick={() => run(() => api.verify(payment.id, tagId === "" ? null : Number(tagId)))}>標記已驗證</button>}
+        {payment.status === "verified" && <button className="btn" disabled={busy} onClick={() => run(() => api.unverify(payment.id))}>撤回驗證</button>}
         {payment.screenshot_key && <button className="btn btn--danger" disabled={busy} onClick={() => run(() => api.deleteProof(payment.id))}>刪除截圖</button>}
       </div>
 
@@ -165,6 +270,19 @@ function PaymentDetail({ payment, tags, onClose, onDone }: { payment: Payment; t
         <Field label="單筆覆寫金額"><input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={busy} /></Field>
         <button className="btn" disabled={busy} onClick={() => run(() => api.overrideAmount(payment.id, Number(amount)))}>更新金額</button>
       </div>
+
+      <hr style={{ border: 0, borderTop: "1px solid var(--line)", margin: "18px 0" }} />
+      <button
+        className="btn btn--danger"
+        disabled={busy}
+        onClick={() => {
+          const hasHistory = payment.status !== "pending"; // paid/verified/rejected all carry real activity
+          const msg = hasHistory
+            ? "這筆已有繳費／審核紀錄，刪除後將從對帳與紀錄中消失且無法復原（仍保留稽核紀錄）。確定刪除？"
+            : "確定刪除這筆待繳紀錄？（保留稽核紀錄）";
+          if (window.confirm(msg)) run(() => api.deletePayment(payment.id));
+        }}
+      >刪除此筆</button>
     </Modal>
   );
 }

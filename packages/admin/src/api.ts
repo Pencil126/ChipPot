@@ -40,16 +40,22 @@ export interface ChannelTag { id: number; name: string; type: string | null; act
 export interface Plan { id: number; name: string; provider: string; monthly_amount: number; discord_role_id: string | null; active: number; subscription_count?: number }
 export interface User { id: number; display_name: string; discord_id: string | null; email: string | null; note: string | null; subscription_count?: number; payment_count?: number }
 export interface Subscription { id: number; user_name: string; plan_name: string; status: string; start_date: string; billing_day: number; custom_cycle: number; user_id: number; plan_id: number; payment_count?: number }
+export interface ReconcileLine { payment_id?: number; subscription_id: number; user_id: number; user_name: string; plan_name: string; amount: number; from?: number; to?: number; discord_id: string | null }
+export interface ReconcileDiff { opened: boolean; add: ReconcileLine[]; remove: ReconcileLine[]; reprice: ReconcileLine[]; frozen_count: number }
+export interface ReconcileApplied { ok: boolean; applied: { added: number; removed: number; repriced: number; frozen: number }; notified: number }
 
 export const api = {
   workspace: () => req<{ workspace: any; r2_configured: boolean }>("GET", "/workspace"),
   updateWorkspace: (b: unknown) => req("PATCH", "/workspace", b),
   rebuildPaymentMessage: () => req<{ message_id: string }>("POST", "/discord/payment-message"),
+  rebuildBindMessage: () => req<{ message_id: string }>("POST", "/discord/bind-message"),
   registerCommands: () => req<{ ok: boolean; registered: number }>("POST", "/discord/register-commands"),
   reconcile: (period: string) => req<Reconcile>("GET", `/reconcile${qs({ period })}`),
   notifications: (period: string) => req<{ billing_opened: { sent_at: string } | null; overdue: { sent_at: string } | null }>("GET", `/notifications${qs({ period })}`),
   resendNotification: (type: string, period: string) => req<{ sent?: boolean; count?: number }>("POST", "/notifications/resend", { type, period }),
   resetNotification: (type: string, period: string) => req<{ deleted: number }>("POST", "/notifications/reset", { type, period }),
+  testNotification: (b: { kind: "bark" | "webhook"; bark_key?: string; bark_server?: string; webhook_url?: string; template?: string }) =>
+    req<{ ok: boolean; status?: number; error?: string }>("POST", "/notifications/test", b),
   initiateBilling: (b: { period: string; amounts: { plan_id: number; amount: number }[] }) =>
     req<{ sent: boolean; updated_plans: number; updated_payments: number }>("POST", "/billing/initiate", b),
   payments: (p?: { period?: string; status?: string }) => req<{ payments: Payment[] }>("GET", `/payments${qs(p)}`),
@@ -57,6 +63,10 @@ export const api = {
   reject: (id: number, reason: string) => req("POST", `/payments/${id}/reject`, { rejected_reason: reason }),
   overrideAmount: (id: number, amount: number) => req("POST", `/payments/${id}/amount`, { amount }),
   deleteProof: (id: number) => req("POST", `/payments/${id}/delete-proof`),
+  deletePayment: (id: number) => req<{ ok: boolean }>("DELETE", `/payments/${id}`),
+  unverify: (id: number) => req<{ ok: boolean }>("POST", `/payments/${id}/unverify`),
+  syncPeriodBills: (period: string, opts: { dry_run: boolean; notify_added?: boolean }) =>
+    req<ReconcileDiff | ReconcileApplied>("POST", `/billing/${period}/sync`, opts),
   manualPayment: (b: unknown) => req("POST", "/payments/manual", b),
   uploadLink: (b: unknown) => req<{ token: string; path: string; url: string; expires_at: string }>("POST", "/upload-link", b),
   users: () => req<{ users: User[] }>("GET", "/users"),

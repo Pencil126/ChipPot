@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { nowUtcIso } from "./time";
 import { ensurePeriodPayment } from "./billing";
+import { notifyPaymentSubmitted } from "./payment-notify";
 
 // ── R2 key + image validation ────────────────────────────────────────────────
 
@@ -97,6 +98,10 @@ export interface SettleInput {
   paymentNote?: string | null;
   proof?: { body: R2Body; ext: string; contentType: string } | null;
   tokenHash?: string | null; // web path only: atomically claim the one-time token
+  // Optional: schedule the post-settle notification in the background instead of awaiting it.
+  // Discord component interactions MUST respond within 3s, so they pass ctx.waitUntil here;
+  // when omitted (e.g. the web upload route), the notification is awaited inline.
+  waitUntil?: (p: Promise<unknown>) => void;
 }
 
 export interface SettleResult {
@@ -220,12 +225,31 @@ export async function settleUserPeriod(env: Env, input: SettleInput): Promise<Se
     key = null;
   }
 
+  const paidCount = paidRows.results.length;
+  const totalAmount = paidRows.results.reduce((s, r) => s + r.amount, 0);
+  const paymentIds = paidRows.results.map((r) => r.id);
+
+  // Notify the owner that there's a payment to review (Bark / webhook, if configured).
+  // notifyPaymentSubmitted does external HTTP and never throws. On the Discord component path it
+  // must NOT be awaited (the interaction has a hard 3s budget — awaiting it caused "此交互失敗"
+  // even though the push went out), so callers pass ctx.waitUntil to run it in the background.
+  // Without waitUntil (e.g. the web upload route, no hard limit) we await it inline.
+  if (paidCount > 0) {
+    const u = await env.DB.prepare("SELECT display_name FROM users WHERE id = ?")
+      .bind(userId).first<{ display_name: string }>();
+    const notifying = notifyPaymentSubmitted(env, {
+      workspaceId, payer: u?.display_name ?? `#${userId}`,
+      amount: totalAmount, period, paymentId: paymentIds[0]!, paidCount,
+    });
+    if (input.waitUntil) input.waitUntil(notifying); else await notifying;
+  }
+
   return {
-    paidCount: paidRows.results.length,
-    totalAmount: paidRows.results.reduce((s, r) => s + r.amount, 0),
+    paidCount,
+    totalAmount,
     alreadyPaidCount: await alreadyPaidCount(env, workspaceId, userId, period),
     screenshotKey: key,
-    paymentIds: paidRows.results.map((r) => r.id),
+    paymentIds,
   };
 }
 

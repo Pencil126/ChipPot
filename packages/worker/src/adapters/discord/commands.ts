@@ -2,10 +2,17 @@
 export const PAY_BUTTON_PREFIX = "chippot:pay";
 // The channel string-select shown after the button (action:workspace:period).
 export const PAY_SELECT_PREFIX = "chippot:paysel";
+// The period string-select shown when the member owes more than one opened period (action:workspace).
+export const PAY_PERIOD_PREFIX = "chippot:payperiod";
 // The 發起繳費 modal (action:workspace:period). Text inputs use custom_id `amt:<plan_id>`.
 export const INITIATE_MODAL_PREFIX = "chippot:initiate";
 // The self-bind string-select (action:workspace:origin). origin ∈ {pay, cmd}.
 export const BIND_SELECT_PREFIX = "chippot:bind";
+// Persistent public bind button. MUST NOT be "chippot:bind" (would collide with BIND_SELECT_PREFIX);
+// dispatch checks this BEFORE BIND_SELECT_PREFIX because "chippot:bindbtn…" startsWith "chippot:bind".
+export const BIND_BUTTON_PREFIX = "chippot:bindbtn";
+// Modal opened from the bind button / pay-bind when unbound members exceed the 25-option select cap.
+export const BIND_SEARCH_MODAL_PREFIX = "chippot:bindsearch";
 
 // Discord option types we use.
 export const OPT_STRING = 3;
@@ -42,6 +49,29 @@ export function payButtonRow(workspaceId = 1, version = "v1") {
   return {
     type: CT_ACTION_ROW,
     components: [{ type: CT_BUTTON, style: 1, label: "繳費", custom_id: `${PAY_BUTTON_PREFIX}:${workspaceId}:${version}` }],
+  };
+}
+
+/** Persistent public "綁定 Discord" button row. custom_id = action:workspace. */
+export function bindButtonRow(workspaceId = 1) {
+  return {
+    type: CT_ACTION_ROW,
+    components: [{ type: CT_BUTTON, style: 2, label: "綁定 Discord", custom_id: `${BIND_BUTTON_PREFIX}:${workspaceId}` }],
+  };
+}
+
+/** String-select of payable periods (months), shown when the member owes more than one. */
+export function periodSelectRow(workspaceId: number, periods: string[]) {
+  return {
+    type: CT_ACTION_ROW,
+    components: [{
+      type: CT_STRING_SELECT,
+      custom_id: `${PAY_PERIOD_PREFIX}:${workspaceId}`,
+      placeholder: "選擇要繳的月份",
+      min_values: 1,
+      max_values: 1,
+      options: periods.slice(0, 25).map((p) => ({ label: p, value: p })),
+    }],
   };
 }
 
@@ -131,9 +161,37 @@ export const INITIATE_COMMAND = {
   default_member_permissions: MANAGE_GUILD,
 };
 
-/** `/綁定` command registration payload. */
+/** `/綁定` command registration payload. The optional 名字 option autocompletes unbound members,
+ * so a roster larger than the 25-option select cap can still self-bind by typing their name. */
 export const BIND_COMMAND = {
   name: "綁定",
   type: 1,
   description: "把你的 Discord 帳號綁定到名單上的成員",
+  options: [
+    { type: OPT_STRING, name: "名字", description: "輸入你的名字搜尋（名單較多時用）", autocomplete: true, required: false },
+  ],
 };
+
+/** Modal (opened from the bind button / pay-bind) to search the unbound roster by name when it
+ * exceeds the 25-option select cap. custom_id = action:workspace:origin. Text input custom_id = "q". */
+export function bindSearchModal(workspaceId: number, origin: "pay" | "cmd") {
+  return {
+    type: RT_MODAL,
+    data: {
+      custom_id: `${BIND_SEARCH_MODAL_PREFIX}:${workspaceId}:${origin}`,
+      title: "綁定 Discord — 搜尋你的名字",
+      components: [{
+        type: CT_ACTION_ROW,
+        components: [{
+          type: CT_TEXT_INPUT,
+          custom_id: "q",
+          label: "輸入你的名字（可只打部分）",
+          style: 1, // short
+          required: true,
+          min_length: 1,
+          max_length: 50,
+        }],
+      }],
+    },
+  };
+}

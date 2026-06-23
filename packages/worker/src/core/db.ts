@@ -156,6 +156,33 @@ export async function listSettleablePayments(
   return results;
 }
 
+/**
+ * Periods the member can pay right now = billing-opened AND still owed (pending/rejected) for
+ * their active subs, oldest first. This intentionally includes a pre-opened *next* month, so once
+ * an admin runs 發起繳費 members can register that period immediately (not only once the calendar
+ * reaches it).
+ */
+export async function listOpenPayablePeriods(
+  db: D1Database,
+  workspaceId: number,
+  userId: number
+): Promise<string[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT DISTINCT p.period AS period
+       FROM payments p
+       JOIN subscriptions s ON s.id = p.subscription_id
+       WHERE p.workspace_id = ? AND s.user_id = ? AND s.status = 'active'
+         AND p.status IN ('pending','rejected')
+         AND EXISTS (SELECT 1 FROM notification_logs n
+                     WHERE n.workspace_id = p.workspace_id AND n.type = 'billing_opened' AND n.period = p.period)
+       ORDER BY p.period`
+    )
+    .bind(workspaceId, userId)
+    .all<{ period: string }>();
+  return results.map((r) => r.period);
+}
+
 export interface UnboundUser {
   id: number;
   display_name: string;
@@ -169,6 +196,28 @@ export async function listUnboundUsers(
   const { results } = await db
     .prepare("SELECT id, display_name FROM users WHERE workspace_id = ? AND discord_id IS NULL ORDER BY id")
     .bind(workspaceId)
+    .all<UnboundUser>();
+  return results;
+}
+
+/**
+ * Unbound users whose display_name contains `query` (case-insensitive for ASCII; substring for CJK),
+ * capped at `limit`. Used when the unbound roster exceeds Discord's 25-option select cap, so members
+ * can type their name (modal search / `/綁定` autocomplete) instead of scrolling a truncated list.
+ * An empty query returns the first `limit` unbound users. LIKE wildcards in the query are escaped.
+ */
+export async function searchUnboundUsers(
+  db: D1Database,
+  workspaceId: number,
+  query: string,
+  limit: number
+): Promise<UnboundUser[]> {
+  const escaped = query.replace(/[\\%_]/g, (m) => "\\" + m);
+  const { results } = await db
+    .prepare(
+      "SELECT id, display_name FROM users WHERE workspace_id = ? AND discord_id IS NULL AND display_name LIKE ? ESCAPE '\\' ORDER BY id LIMIT ?"
+    )
+    .bind(workspaceId, `%${escaped}%`, limit)
     .all<UnboundUser>();
   return results;
 }
